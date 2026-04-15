@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+.python-version
+uv.lock
+
+# Configs
+config.yml
+.env
+
+# Sandbox
+# sandbox/*
+# ~sandbox/.gitkeep
+
+
+# Logs
+logs/
+*.log

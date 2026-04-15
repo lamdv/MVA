@@ -1,0 +1,21 @@
+[project]
+name = "mva"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "ldang", email = "lam.dv@live.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "dotenv>=0.9.9",
+    "pyyaml>=6.0.3",
+    "requests>=2.33.1",
+]
+
+[project.scripts]
+mva = "mva.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.26,<0.10.0"]
+build-backend = "uv_build"
