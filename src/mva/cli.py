@@ -69,13 +69,21 @@ def test(query: str, model: str = ""):
         sys.exit(1)
 
 
-def slash_function(agent, cmd: str, args=None):
-    """Handle slash commands."""
+def slash_function(agent, cmd: str, history: list | None = None, args=None):
+    """Handle slash commands.
+
+    Args:
+        agent: Agent instance
+        cmd: Command string
+        history: Chat history (can be modified by clear command)
+        args: Legacy unused parameter
+    """
     match cmd.lower():
         case "help":
             print("Available commands:")
             print("/help - Show this help message")
             print("/list - List available tools and skills")
+            print("/clear - Clear chat history and start fresh")
             print("/exit or /quit - Exit the program")
         case "models":
             print("Available models:")
@@ -98,6 +106,12 @@ def slash_function(agent, cmd: str, args=None):
             else:
                 print("No skills loaded.")
             print()
+        case "clear":
+            if history is not None:
+                history.clear()
+                print("🧹 Chat history cleared. Starting fresh.")
+            else:
+                print("⚠️  No history to clear")
         case "exit" | "quit":
             _save_history()
             print("👋 Goodbye!")
@@ -123,7 +137,7 @@ def _chat(agent, verbose: bool = False):
 
         if user_input.startswith("/"):
             cmd = user_input[1:]
-            slash_function(agent, cmd)
+            slash_function(agent, cmd, history=history)
             continue
 
         # Add user message
