@@ -367,12 +367,80 @@ def code_execution(code: str, files: Optional[Dict[str, str]] = None, timeout: i
         "exit_code": result.exit_code,
     }
 
+
+def delegate(subtask: str, role: str = "helpful assistant") -> dict:
+    """
+    Spawn a child agent to handle a subtask in parallel.
+
+    Child agent gets:
+    - Fresh system prompt (based on role, not inherited)
+    - Same sandbox folder (can share files with parent)
+    - Same skills and tools (except delegate, to prevent recursion)
+    - Independent telemetry session (learns separately, feeds into shared pool)
+
+    Use when: you have independent subtasks that can be done in parallel,
+    or need a specialized agent for a specific domain.
+
+    Args:
+        subtask: Task description for the child agent
+        role: Role/specialization instruction (e.g., "You are a CSV analyst")
+
+    Returns:
+        dict with keys:
+        - success: bool (True if child completed without error)
+        - result: str (child agent's response)
+        - child_session_id: str (session UUID, useful for tracking in telemetry)
+        - error: str (only if success=False)
+    """
+    from ..agent import get_agent
+
+    try:
+        # Create child agent with fresh system prompt
+        child_prompt = f"""{role}
+
+You are a specialist agent solving a subtask. You have access to the same tools and skills as your parent agent, but cannot delegate further (no recursive spawning).
+
+Subtask: {subtask}
+
+Solve this subtask and report your findings."""
+
+        child_agent = get_agent(system_prompt=child_prompt)
+
+        # Remove delegate tool from child (prevent infinite recursion)
+        global _loaded_tools
+        delegate_tool = next((t for t in _loaded_tools if t.name == "delegate"), None)
+        if delegate_tool:
+            _loaded_tools.remove(delegate_tool)
+
+        try:
+            # Run child with the subtask
+            result = child_agent.run([{"role": "user", "content": subtask}])
+
+            return {
+                "success": True,
+                "result": result,
+                "child_session_id": child_agent._session_id or "unknown",
+            }
+        finally:
+            # Restore delegate tool for other agents
+            if delegate_tool:
+                _loaded_tools.append(delegate_tool)
+
+    except Exception as e:
+        _log.error(f"delegate() failed: {e}", exc_info=True)
+        return {
+            "success": False,
+            "result": "",
+            "child_session_id": "unknown",
+            "error": str(e),
+        }
+
 # ====================== Automatic Tool Registration ======================
 
 def _register_built_in_tools() -> None:
     """Automatically register all built-in tools when the module is imported."""
     global _loaded_tools
-    built_ins = [read_file, write_file, list_files, code_execution]
+    built_ins = [read_file, write_file, list_files, code_execution, delegate]
     for fn in built_ins:
         _loaded_tools.append(Tool.from_function(fn))
 
