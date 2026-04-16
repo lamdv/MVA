@@ -71,43 +71,98 @@ def test(query: str, model: str = ""):
         sys.exit(1)
 
 
-def _review_generated(agent):
-    """Review generated tools and skills."""
+def _review_generated(agent, tool_name=None, flag=None):
+    """Review generated tools and skills.
+
+    Modes:
+    - No args: list generated tools/skills
+    - With name: show tool code
+    - With name + "self": LLM summarizes the tool code
+    """
     from .utils.config import load_config
 
     cfg = load_config()
     telemetry_dir = Path(cfg.get("self_improvement", {}).get("telemetry_dir", "sandbox/telemetry"))
 
     generated_tools_dir = telemetry_dir / "generated_tools"
-    generated_skills_dir = telemetry_dir / "generated_skills"
 
-    print("\n📦 Generated Tools (ready for promotion):\n")
-    if generated_tools_dir.exists():
-        tool_files = list(generated_tools_dir.glob("*.py"))
-        if tool_files:
-            for tool_file in sorted(tool_files):
-                size = tool_file.stat().st_size
-                print(f"  • {tool_file.name} ({size} bytes)")
+    # Mode 1: List all generated tools (no args)
+    if tool_name is None:
+        generated_skills_dir = telemetry_dir / "generated_skills"
+
+        print("\n📦 Generated Tools (un-approved):\n")
+        if generated_tools_dir.exists():
+            tool_files = list(generated_tools_dir.glob("*.py"))
+            if tool_files:
+                for tool_file in sorted(tool_files):
+                    size = tool_file.stat().st_size
+                    print(f"  • {tool_file.name} ({size} bytes)")
+            else:
+                print("  (none yet)")
         else:
-            print("  (none yet)")
-    else:
-        print("  (directory not found)")
+            print("  (directory not found)")
 
-    print("\n📚 Generated Skills (ready for promotion):\n")
-    if generated_skills_dir.exists():
-        skill_dirs = [d for d in generated_skills_dir.iterdir() if d.is_dir()]
-        if skill_dirs:
-            for skill_dir in sorted(skill_dirs):
-                skill_file = skill_dir / "SKILL.md"
-                size = skill_file.stat().st_size if skill_file.exists() else 0
-                print(f"  • {skill_dir.name}/ ({size} bytes)")
+        print("\n📚 Generated Skills (un-approved):\n")
+        if generated_skills_dir.exists():
+            skill_dirs = [d for d in generated_skills_dir.iterdir() if d.is_dir()]
+            if skill_dirs:
+                for skill_dir in sorted(skill_dirs):
+                    skill_file = skill_dir / "SKILL.md"
+                    size = skill_file.stat().st_size if skill_file.exists() else 0
+                    print(f"  • {skill_dir.name}/ ({size} bytes)")
+            else:
+                print("  (none yet)")
         else:
-            print("  (none yet)")
-    else:
-        print("  (directory not found)")
+            print("  (directory not found)")
 
-    print(f"\nTo promote: /approve-tool <name> or /approve-skill <name>")
-    print(f"To view code: /view-tool <name> or /view-skill <name>\n")
+        print(f"\nUsage:")
+        print(f"  /review <tool>      — view tool code")
+        print(f"  /review <tool> self — LLM summarize tool")
+        print(f"  /approve-tool <name> — promote to tools/\n")
+        return
+
+    # Mode 2: View tool code (with name, no flag)
+    tool_file = generated_tools_dir / f"{tool_name}.py"
+    if not tool_file.exists():
+        print(f"❌ Tool not found: {tool_file}")
+        return
+
+    code = tool_file.read_text()
+
+    if flag is None:
+        # Just show the code
+        print(f"\n📄 {tool_name}.py:\n")
+        print(code)
+        print()
+        return
+
+    # Mode 3: LLM summarize (with name + "self")
+    if flag.lower() != "self":
+        print(f"Unknown flag: {flag}")
+        print(f"Usage: /review <tool> self")
+        return
+
+    print(f"\n🤖 Analyzing {tool_name}.py...")
+    try:
+        response = agent.complete([
+            {
+                "role": "user",
+                "content": f"""Briefly analyze this generated tool code and provide:
+1. What it does (one line)
+2. When to use it (one line)
+3. Any concerns or improvements (2-3 bullets, or "none")
+4. Recommendation: safe to approve? (YES/NO + reason)
+
+```python
+{code}
+```
+
+Format as markdown."""
+            }
+        ])
+        print(f"\n{response}\n")
+    except Exception as e:
+        print(f"❌ Error: {e}")
 
 
 def _approve_tool(agent, name: str):
@@ -244,7 +299,14 @@ def slash_function(agent, cmd: str, args=None):
                 print("No skills loaded.")
             print()
         case "review":
-            _review_generated(agent)
+            # /review [<tool> [self]]
+            if arg:
+                parts = arg.split()
+                tool_name = parts[0] if len(parts) > 0 else None
+                flag = parts[1] if len(parts) > 1 else None
+                _review_generated(agent, tool_name=tool_name, flag=flag)
+            else:
+                _review_generated(agent)
         case "approve-tool":
             if not arg:
                 print("Usage: /approve-tool <name>")
