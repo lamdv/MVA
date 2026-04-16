@@ -15,6 +15,7 @@ Build intelligent agents that can read files, write code, execute Python, and fo
 - Write Python functions, they become agent tools automatically
 - Strict sandbox enforcement on file operations
 - Argument validation and error handling
+- Built in essential tools: Read Write ls and code-execute
 
 🎯 **High-Level Skills**
 - Reusable workflows (SKILL.md files)
@@ -54,6 +55,10 @@ uv sync
 cp .env.example .env
 
 # Edit .env and add API key
+export LLM_PROVIDER=openai
+export LLM_BASE_URL=http://localhost:8002/v1
+export DEFAULT_MODEL=meta-llama/Llama-2-7b-hf
+export LLM_API_KEY=no-key
 # For Anthropic:
 export ANTHROPIC_API_KEY=sk-ant-...
 export LLM_PROVIDER=anthropic
