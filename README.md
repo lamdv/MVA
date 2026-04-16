@@ -26,6 +26,12 @@ Build intelligent agents that can read files, write code, execute Python, and fo
 - Tool-calling loop with full transparency
 - Multiple LLM clients with unified interface
 
+📊 **Self-Improvement System**
+- Observe: Automatic telemetry recording of every tool call
+- Reflect: LLM-based analysis to identify patterns and insights
+- Improve: Generate new tools and skills from learnings (coming soon)
+- Fully opt-in via config, never interferes with normal operation
+
 🛡️ **Security by Default**
 - Single-folder sandbox for all file operations
 - Path escape detection and prevention
@@ -341,6 +347,39 @@ agent = Agent(
 history = [{"role": "user", "content": "Help me debug this code..."}]
 response = agent.run(history)
 ```
+
+### Example 4: Self-Improvement (Observe & Reflect)
+
+Enable the agent to learn from its own tool usage and generate insights:
+
+```yaml
+# config.yml
+self_improvement:
+  telemetry_dir: sandbox/telemetry
+  reflect_always: true
+  fail_rate_threshold: 0.3
+  slow_tool_threshold_ms: 5000
+```
+
+Then run sessions normally:
+
+```bash
+# Session 1: Agent records telemetry
+uv run mva test "Analyze this CSV file and generate a report"
+
+# Check what was recorded
+cat sandbox/telemetry/sessions/*.json | python -m json.tool
+
+# View reflections (LLM analysis of tool usage)
+cat sandbox/telemetry/reflections/*.md
+```
+
+**What happens:**
+1. **Observe** — Every tool call is recorded: name, args, success/failure, latency
+2. **Reflect** — After the session, an LLM analyzes the telemetry and generates insights
+3. **Improve** — Agent learns to generate new tools for missing capabilities (Phase 3, coming soon)
+
+See [SELF_IMPROVEMENT.md](SELF_IMPROVEMENT.md) and [docs/SELF_IMPROVEMENT_PLAN.md](docs/SELF_IMPROVEMENT_PLAN.md) for details.
 
 ## Project Structure
 
