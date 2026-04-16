@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import argparse
+import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -69,13 +71,157 @@ def test(query: str, model: str = ""):
         sys.exit(1)
 
 
+def _review_generated(agent):
+    """Review generated tools and skills."""
+    from .utils.config import load_config
+
+    cfg = load_config()
+    telemetry_dir = Path(cfg.get("self_improvement", {}).get("telemetry_dir", "sandbox/telemetry"))
+
+    generated_tools_dir = telemetry_dir / "generated_tools"
+    generated_skills_dir = telemetry_dir / "generated_skills"
+
+    print("\n📦 Generated Tools (ready for promotion):\n")
+    if generated_tools_dir.exists():
+        tool_files = list(generated_tools_dir.glob("*.py"))
+        if tool_files:
+            for tool_file in sorted(tool_files):
+                size = tool_file.stat().st_size
+                print(f"  • {tool_file.name} ({size} bytes)")
+        else:
+            print("  (none yet)")
+    else:
+        print("  (directory not found)")
+
+    print("\n📚 Generated Skills (ready for promotion):\n")
+    if generated_skills_dir.exists():
+        skill_dirs = [d for d in generated_skills_dir.iterdir() if d.is_dir()]
+        if skill_dirs:
+            for skill_dir in sorted(skill_dirs):
+                skill_file = skill_dir / "SKILL.md"
+                size = skill_file.stat().st_size if skill_file.exists() else 0
+                print(f"  • {skill_dir.name}/ ({size} bytes)")
+        else:
+            print("  (none yet)")
+    else:
+        print("  (directory not found)")
+
+    print(f"\nTo promote: /approve-tool <name> or /approve-skill <name>")
+    print(f"To view code: /view-tool <name> or /view-skill <name>\n")
+
+
+def _approve_tool(agent, name: str):
+    """Promote a generated tool to the active tools directory."""
+    from .utils.config import load_config
+
+    cfg = load_config()
+    telemetry_dir = Path(cfg.get("self_improvement", {}).get("telemetry_dir", "sandbox/telemetry"))
+
+    src = telemetry_dir / "generated_tools" / f"{name}.py"
+
+    if not src.exists():
+        print(f"❌ Tool not found: {src}")
+        return
+
+    # Determine destination
+    tools_dir = Path(cfg.get("tools_dir", "tools"))
+    dst = tools_dir / f"{name}.py"
+
+    # Copy
+    try:
+        shutil.copy(src, dst)
+        print(f"✅ Promoted {name}.py to {dst}")
+        print(f"   Run: uv run mva list   # to verify discovery")
+    except Exception as e:
+        print(f"❌ Failed to promote: {e}")
+
+
+def _approve_skill(agent, name: str):
+    """Promote a generated skill to the active skills directory."""
+    from .utils.config import load_config
+
+    cfg = load_config()
+    telemetry_dir = Path(cfg.get("self_improvement", {}).get("telemetry_dir", "sandbox/telemetry"))
+
+    src = telemetry_dir / "generated_skills" / name
+
+    if not src.exists() or not (src / "SKILL.md").exists():
+        print(f"❌ Skill not found: {src}")
+        return
+
+    # Determine destination
+    skills_dir = Path(cfg.get("skills_dir", "sandbox/engine/skills"))
+    dst = skills_dir / name
+
+    # Copy
+    try:
+        if dst.exists():
+            print(f"⚠️  {name} already exists at {dst}")
+            overwrite = input("Overwrite? [y/N]: ").strip().lower()
+            if overwrite != "y":
+                print("Cancelled.")
+                return
+            shutil.rmtree(dst)
+        shutil.copytree(src, dst)
+        print(f"✅ Promoted {name}/ to {dst}")
+        print(f"   Run: uv run mva list   # to verify discovery")
+    except Exception as e:
+        print(f"❌ Failed to promote: {e}")
+
+
+def _view_tool(agent, name: str):
+    """View the code of a generated tool."""
+    from .utils.config import load_config
+
+    cfg = load_config()
+    telemetry_dir = Path(cfg.get("self_improvement", {}).get("telemetry_dir", "sandbox/telemetry"))
+
+    src = telemetry_dir / "generated_tools" / f"{name}.py"
+
+    if not src.exists():
+        print(f"❌ Tool not found: {src}")
+        return
+
+    print(f"\n📄 {name}.py:\n")
+    print(src.read_text())
+    print()
+
+
+def _view_skill(agent, name: str):
+    """View the code of a generated skill."""
+    from .utils.config import load_config
+
+    cfg = load_config()
+    telemetry_dir = Path(cfg.get("self_improvement", {}).get("telemetry_dir", "sandbox/telemetry"))
+
+    src = telemetry_dir / "generated_skills" / name / "SKILL.md"
+
+    if not src.exists():
+        print(f"❌ Skill not found: {src}")
+        return
+
+    print(f"\n📄 {name}/SKILL.md:\n")
+    print(src.read_text())
+    print()
+
+
 def slash_function(agent, cmd: str, args=None):
     """Handle slash commands."""
-    match cmd.lower():
+    parts = cmd.split(maxsplit=1)
+    command = parts[0].lower()
+    arg = parts[1] if len(parts) > 1 else None
+
+    match command:
         case "help":
             print("Available commands:")
             print("/help - Show this help message")
             print("/list - List available tools and skills")
+            print("/review - Review generated tools and skills (Phase 3)")
+            print("/approve-tool <name> - Promote a generated tool to tools/")
+            print("/approve-skill <name> - Promote a generated skill to skills/")
+            print("/view-tool <name> - View generated tool code")
+            print("/view-skill <name> - View generated skill code")
+            print("/models - List available LLM models")
             print("/exit or /quit - Exit the program")
         case "models":
             print("Available models:")
@@ -87,7 +233,6 @@ def slash_function(agent, cmd: str, args=None):
                 for tool in _tools:
                     tool = tool['function']
                     print(f"  • {tool['name']}: {tool['description'].splitlines()[0]}")
-                    # print(f"===")
             else:
                 print("No tools loaded.")
 
@@ -98,6 +243,28 @@ def slash_function(agent, cmd: str, args=None):
             else:
                 print("No skills loaded.")
             print()
+        case "review":
+            _review_generated(agent)
+        case "approve-tool":
+            if not arg:
+                print("Usage: /approve-tool <name>")
+                return
+            _approve_tool(agent, arg)
+        case "approve-skill":
+            if not arg:
+                print("Usage: /approve-skill <name>")
+                return
+            _approve_skill(agent, arg)
+        case "view-tool":
+            if not arg:
+                print("Usage: /view-tool <name>")
+                return
+            _view_tool(agent, arg)
+        case "view-skill":
+            if not arg:
+                print("Usage: /view-skill <name>")
+                return
+            _view_skill(agent, arg)
         case "exit" | "quit":
             _save_history()
             print("👋 Goodbye!")
