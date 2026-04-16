@@ -30,34 +30,72 @@ def _parse_skill_metadata(skill_md: Path) -> dict | None:
 
 
 class SkillCatalog:
-    """Manages skill discovery and registration."""
+    """Manages skill discovery and registration.
+
+    Auto-scans skill folders in priority order:
+    1. Root-level skills/ (curated, checked-in)
+    2. sandbox/engine/skills/ (generated, runtime)
+    """
 
     def __init__(self, skills_dir: Path | str | None = None):
-        self._skills_dir: Path | None = Path(skills_dir) if skills_dir else None
+        # Primary skills directory from config, or default to root-level skills/
+        if skills_dir:
+            self._primary_dir: Path | None = Path(skills_dir)
+        else:
+            self._primary_dir: Path | None = Path("skills")
+
+        # Auto-detected secondary directory (generated skills)
+        self._secondary_dir: Path | None = Path("sandbox/engine/skills")
+
         self._skill_mtimes: dict[Path, float] = {}
         self._skill_catalog: dict[str, dict] = {}  # name -> {description, path}
 
+    def _get_skill_dirs(self) -> list[Path]:
+        """Get list of skill directories to scan, in priority order.
+
+        Curated skills (primary) take precedence over generated (secondary).
+        """
+        dirs = []
+
+        # Primary: root-level skills/ or configured skills_dir
+        if self._primary_dir and self._primary_dir.is_dir():
+            dirs.append(self._primary_dir)
+
+        # Secondary: sandbox/engine/skills/ (runtime generated)
+        if self._secondary_dir and self._secondary_dir.is_dir():
+            dirs.append(self._secondary_dir)
+
+        return dirs
+
     def refresh(self) -> None:
-        """Re-scan skills directory; reload changed SKILL.md files."""
-        if self._skills_dir is None or not self._skills_dir.is_dir():
+        """Re-scan all skill directories; reload changed SKILL.md files.
+
+        Scans in order: curated skills first, then generated skills.
+        Earlier directories take precedence if skill names conflict.
+        """
+        dirs = self._get_skill_dirs()
+        if not dirs:
             return
 
         seen = set()
-        for skill_md in self._skills_dir.rglob("SKILL.md"):
-            try:
-                mtime = skill_md.stat().st_mtime
-            except OSError:
-                continue
-            seen.add(skill_md)
-            if self._skill_mtimes.get(skill_md) == mtime:
-                continue  # unchanged
-            self._skill_mtimes[skill_md] = mtime
-            meta = _parse_skill_metadata(skill_md)
-            if meta:
-                self._skill_catalog[meta["name"]] = {
-                    "description": meta["description"],
-                    "path": skill_md,
-                }
+        for skills_dir in dirs:
+            for skill_md in skills_dir.rglob("SKILL.md"):
+                try:
+                    mtime = skill_md.stat().st_mtime
+                except OSError:
+                    continue
+                seen.add(skill_md)
+                if self._skill_mtimes.get(skill_md) == mtime:
+                    continue  # unchanged
+                self._skill_mtimes[skill_md] = mtime
+                meta = _parse_skill_metadata(skill_md)
+                if meta:
+                    # Only add if not already registered (priority order)
+                    if meta["name"] not in self._skill_catalog:
+                        self._skill_catalog[meta["name"]] = {
+                            "description": meta["description"],
+                            "path": skill_md,
+                        }
 
         # Remove deleted skills
         for removed in set(self._skill_mtimes) - seen:

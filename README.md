@@ -4,6 +4,10 @@ A modular, extensible Python agent framework with **tool-calling**, **skill disc
 
 Build intelligent agents that can read files, write code, execute Python, and follow high-level workflows—all with a sandbox for safety.
 
+I want to see how far I can push the harness to the extreme. Extremely small, human understandable but machine provide continuous improvement.
+
+It is best to use with llm-wiki by Karpathy as a librarian agent
+
 ## Features
 
 ✨ **Multi-Provider LLM Support**
