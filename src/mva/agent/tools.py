@@ -147,6 +147,8 @@ class PythonSandbox:
         return path.read_text(encoding="utf-8")
 
     def write_file(self, path: Path, content: str) -> None:
+        # Create parent directories if they don't exist
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
 
     def list_files(self, path: Path) -> list[str]:
