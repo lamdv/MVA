@@ -10,10 +10,10 @@ from typing import Any, Generator
 
 import requests
 
-
 # ---------------------------------------------------------------------------
 # Auto-load .env if python-dotenv is available
 # ---------------------------------------------------------------------------
+
 
 def _load_dotenv() -> None:
     """Load environment variables from a ``.env`` file in the CWD."""
@@ -32,18 +32,21 @@ _load_dotenv()
 # Types
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ChatMessage:
     """A single message in a chat conversation."""
-    role: str       # "system", "user", "assistant", "tool"
+
+    role: str  # "system", "user", "assistant", "tool"
     content: str | list[dict[str, Any]]
-    tool_call_id: str | None = None      # for tool role
+    tool_call_id: str | None = None  # for tool role
     tool_calls: list[dict[str, Any]] | None = None  # for assistant role
 
 
 @dataclass
 class ChatChoice:
     """A single choice returned by the chat completions endpoint."""
+
     message: ChatMessage
     index: int = 0
     finish_reason: str | None = None
@@ -53,6 +56,7 @@ class ChatChoice:
 @dataclass
 class CompletionUsage:
     """Token usage information."""
+
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
@@ -61,6 +65,7 @@ class CompletionUsage:
 @dataclass
 class ChatResponse:
     """Full response from a v1/chat/completions call."""
+
     id: str = ""
     object: str = "chat.completion"
     created: int = 0
@@ -73,6 +78,7 @@ class ChatResponse:
 @dataclass
 class ToolDef:
     """Definition of a tool (function) the model can call."""
+
     name: str
     description: str
     parameters: dict[str, Any]  # JSON Schema for the arguments
@@ -81,6 +87,7 @@ class ToolDef:
 # ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
+
 
 class LLMClient:
     """A client for sending chat completion requests to an OpenAI-compatible API.
@@ -98,13 +105,21 @@ class LLMClient:
         base_url: str | None = None,
         api_key: str | None = None,
         default_model: str | None = None,
-        timeout: int = 120,                 # seconds
+        timeout: int = 120,  # seconds
     ) -> None:
         self.base_url = (
-            base_url if base_url is not None else os.environ.get("LLM_BASE_URL", "http://127.0.0.1:8002/v1")
+            base_url
+            if base_url is not None
+            else os.environ.get("LLM_BASE_URL", "http://127.0.0.1:8002/v1")
         ).rstrip("/")
-        self.api_key = api_key if api_key is not None else os.environ.get("LLM_API_KEY", "no-key")
-        self.default_model = default_model if default_model is not None else os.environ.get("DEFAULT_MODEL", "")
+        self.api_key = (
+            api_key if api_key is not None else os.environ.get("LLM_API_KEY", "no-key")
+        )
+        self.default_model = (
+            default_model
+            if default_model is not None
+            else os.environ.get("DEFAULT_MODEL", "")
+        )
         self.timeout = timeout
 
         self._session = requests.Session()
@@ -122,7 +137,7 @@ class LLMClient:
         messages: list[ChatMessage],
         *,
         model: str | None = None,
-        max_tokens: int = 256,
+        max_tokens: int = -1,
         temperature: float = 0.7,
         top_p: float = 1.0,
         stop: str | list[str] | None = None,
@@ -175,15 +190,15 @@ class LLMClient:
         """
         model = model or self.default_model
         if not model:
-            raise ValueError("A model must be specified via argument or DEFAULT_MODEL env var.")
+            raise ValueError(
+                "A model must be specified via argument or DEFAULT_MODEL env var."
+            )
 
         url = f"{self.base_url}/chat/completions"
 
         body: dict[str, Any] = {
             "model": model,
-            "messages": [
-                _message_to_dict(m) for m in messages
-            ],
+            "messages": [_message_to_dict(m) for m in messages],
             "max_tokens": max_tokens,
             "temperature": temperature,
             "top_p": top_p,
@@ -205,7 +220,7 @@ class LLMClient:
 
         body.update(extra_params)
 
-        raw: dict[str, Any] | None = None
+        raw: dict[str, Any] = dict()
 
         try:
             resp = self._session.post(url, json=body, timeout=self.timeout)
@@ -235,7 +250,7 @@ class LLMClient:
         messages: list[ChatMessage],
         *,
         model: str | None = None,
-        max_tokens: int = 256,
+        max_tokens: int = -1,
         temperature: float = 0.7,
         top_p: float = 1.0,
         stop: str | list[str] | None = None,
@@ -260,15 +275,15 @@ class LLMClient:
         """
         model = model or self.default_model
         if not model:
-            raise ValueError("A model must be specified via argument or DEFAULT_MODEL env var.")
+            raise ValueError(
+                "A model must be specified via argument or DEFAULT_MODEL env var."
+            )
 
         url = f"{self.base_url}/chat/completions"
 
         body: dict[str, Any] = {
             "model": model,
-            "messages": [
-                _message_to_dict(m) for m in messages
-            ],
+            "messages": [_message_to_dict(m) for m in messages],
             "max_tokens": max_tokens,
             "temperature": temperature,
             "top_p": top_p,
@@ -357,14 +372,20 @@ class LLMClient:
                         parsed_args = json.loads(args_str) if args_str else {}
                     except json.JSONDecodeError:
                         parsed_args = args_str  # keep raw if incomplete
-                    tool_calls.append({
-                        "id": entry["id"],
-                        "type": "function",
-                        "function": {
-                            "name": name,
-                            "arguments": parsed_args if isinstance(parsed_args, dict) else args_str,
-                        },
-                    })
+                    tool_calls.append(
+                        {
+                            "id": entry["id"],
+                            "type": "function",
+                            "function": {
+                                "name": name,
+                                "arguments": (
+                                    parsed_args
+                                    if isinstance(parsed_args, dict)
+                                    else args_str
+                                ),
+                            },
+                        }
+                    )
 
                 # --- Reasoning / thinking ---
                 reasoning = (
@@ -455,12 +476,13 @@ class LLMClient:
 @dataclass
 class StreamingDelta:
     """A single streaming chunk from a ``chat_stream()`` call."""
+
     id: str = ""
     model: str = ""
-    delta: str = ""            # regular response text fragment in *this* chunk
-    accumulated: str = ""      # full regular response text so far (no thinking)
-    thinking_delta: str = ""   # thinking / reasoning text fragment in *this* chunk
-    thinking: str = ""         # full thinking / reasoning text so far
+    delta: str = ""  # regular response text fragment in *this* chunk
+    accumulated: str = ""  # full regular response text so far (no thinking)
+    thinking_delta: str = ""  # thinking / reasoning text fragment in *this* chunk
+    thinking: str = ""  # full thinking / reasoning text so far
     finish_reason: str | None = None
     usage: CompletionUsage | None = None
     tool_calls: list[dict[str, Any]] | None = None  # accumulated tool calls
@@ -469,6 +491,7 @@ class StreamingDelta:
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _message_to_dict(m: ChatMessage) -> dict[str, Any]:
     """Convert a ChatMessage to the dict format expected by the API."""
@@ -495,6 +518,7 @@ def _tool_to_dict(t: ToolDef) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
+
 
 class LLMError(Exception):
     """Base exception for LLM client errors."""
