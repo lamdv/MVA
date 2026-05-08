@@ -1,0 +1,9 @@
+<thought
+>I cannot read the file `sandbox/test_tool.txt` because I do not have access to your local file system. I can only access files within the provided `sandbox` directory if you use the `read_file` tool.
+
+Would you like me to use the `read_file` tool to read that file? <thought
+>I will use the `read_file` tool to read the content of `sandbox/test_tool.txt`.
+
+<|channel>thought
+<channel|><|tool_call>call:read_file{path: 'sandbox/test_tool.txt'}<tool_call|>
+
