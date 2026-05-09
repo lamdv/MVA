@@ -1,22 +1,26 @@
 [project]
 name = "mva"
 version = "0.1.0"
-description = "Add your description here"
+description = "A Minimum Viable Agent harness"
 readme = "README.md"
-authors = [
-    { name = "ldang", email = "lam.dv@live.com" }
-]
+authors = [{ name = "ldang", email = "lam.dv@live.com" }]
 requires-python = ">=3.13"
 dependencies = [
-    "bs4>=0.0.2",
-    "dotenv>=0.9.9",
-    "pyyaml>=6.0.3",
-    "requests>=2.33.1",
+  "prompt-toolkit>=3.0.52",
+  "pyyaml>=6.0.0",
+  "requests>=2.31.0",
+  "rich>=15.0.0",
+  "streamlit>=1.57.0",
+  "streamlit-extras>=1.5.0",
+  "typer>=0.25.1",
 ]
 
 [project.scripts]
-mva = "mva.cli:main"
+mva = "mva:main"
 
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = ["pylint>=4.0.5"]

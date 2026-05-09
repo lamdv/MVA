@@ -1,3 +1,5 @@
-from .cli import main
+from mva.cli import _app
 
-__all__ = ["main"]
+
+def main():
+    _app()
