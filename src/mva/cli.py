@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import sys
-from typing import Any
+from pathlib import Path
+from typing import Annotated, Any
+
+import typer
 
 from mva.utils import (
     build_messages,
@@ -13,6 +16,7 @@ from mva.utils import (
     print_header,
 )
 from mva.llm import ChatMessage, LLMClient, LLMError, StreamingDelta, ToolDef
+from mva.skills import SkillDef, discover_skills
 from mva.tools import ToolResult, execute_tool, get_tool_defs
 from rich.console import Console
 from rich.markdown import Markdown
@@ -23,21 +27,159 @@ _console = Console()
 
 MAX_TOOL_ROUNDS = 10  # safety limit for tool call loops
 
+# ---------------------------------------------------------------------------
+# CLI application
+# ---------------------------------------------------------------------------
 
-def app() -> None:
-    """Entry point for ``python -m mva``."""
+_app = typer.Typer(
+    name="mva",
+    help="MVA — Minimum Viable Agent harness.",
+    add_completion=False,
+)
+
+
+@_app.command()
+def app(
+    message: Annotated[
+        list[str] | None,
+        typer.Argument(help="Task to run (non-interactive when provided)."),
+    ] = None,
+    print_mode: Annotated[
+        bool,
+        typer.Option(
+            "--print",
+            "-p",
+            help="Print response and exit (non-interactive).",
+        ),
+    ] = False,
+    system_prompt: Annotated[
+        str | None,
+        typer.Option("--system-prompt", help="Replace the default system prompt."),
+    ] = None,
+    append_system_prompt: Annotated[
+        str | None,
+        typer.Option(
+            "--append-system-prompt", help="Append text to the system prompt."
+        ),
+    ] = None,
+    skill: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--skill",
+            "-s",
+            help="Load a skill from a directory or SKILL.md file (repeatable).",
+        ),
+    ] = None,
+    no_skills: Annotated[
+        bool,
+        typer.Option("--no-skills", help="Disable all skill loading."),
+    ] = False,
+    no_context_files: Annotated[
+        bool,
+        typer.Option(
+            "--no-context-files",
+            "-nc",
+            help="Disable AGENT.md context file loading.",
+        ),
+    ] = False,
+) -> None:
+    """Launch the MVA interactive REPL, or run a single task non-interactively."""
 
     install_signal_handler()
-    print_header()
+
+    # Discover skills at startup
+    skills = discover_skills(
+        extra_dirs=skill,
+        no_skills=no_skills,
+    )
+
+    # Build the user message: CLI argument(s) + optional piped stdin
+    user_message = " ".join(message) if message else ""
+    if not sys.stdin.isatty():
+        piped = sys.stdin.read().strip()
+        if piped:
+            user_message = f"{piped}\n\n{user_message}" if user_message else piped
+    user_message = user_message.strip()
 
     client = LLMClient()
-    history: list[dict[str, Any]] = []
+    agent_md_path: str | None = None if no_context_files else "AGENT.md"
 
     try:
-        _repl(client, history)
+        if print_mode or message:
+            # Non-interactive single-run mode
+            _run_single(
+                client,
+                user_message,
+                skills,
+                system_prompt=system_prompt,
+                append_system_prompt=append_system_prompt,
+                agent_md_path=agent_md_path,
+            )
+        else:
+            # Interactive REPL
+            print_header(skills=skills if skills else None)
+            history: list[dict[str, Any]] = []
+            _repl(
+                client,
+                history,
+                skills,
+                system_prompt=system_prompt,
+                append_system_prompt=append_system_prompt,
+                agent_md_path=agent_md_path,
+            )
     finally:
         client.close()
-        # goodbye()
+
+
+# ---------------------------------------------------------------------------
+# Single-run (print) mode
+# ---------------------------------------------------------------------------
+
+
+def _run_single(
+    client: LLMClient,
+    user_message: str,
+    skills: list[SkillDef],
+    *,
+    system_prompt: str | None = None,
+    append_system_prompt: str | None = None,
+    agent_md_path: str | None = "AGENT.md",
+) -> None:
+    """Run a single task non-interactively and print the result."""
+    if not user_message:
+        _console.print("[red]Error:[/] No message provided.")
+        raise typer.Exit(code=1)
+
+    tools = get_tool_defs()
+    system = build_system_prompt(
+        tools,
+        skills=skills,
+        agent_md_path=agent_md_path,
+        system_prompt=system_prompt,
+        append_system_prompt=append_system_prompt,
+    )
+
+    history: list[dict[str, Any]] = [{"role": "user", "content": user_message}]
+    messages = build_messages(system, history, "")
+    messages = [m for m in messages if m.role != "user" or m.content]
+
+    try:
+        _handle_turn(
+            client,
+            messages,
+            tools,
+            history,
+            skills,
+            system_prompt=system_prompt,
+            append_system_prompt=append_system_prompt,
+            agent_md_path=agent_md_path,
+            print_mode=True,
+        )
+    except LLMError as exc:
+        _console.print(f"\n[red]Error:[/] {exc}")
+        raise typer.Exit(code=1)
+
+    print()
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +187,15 @@ def app() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _repl(client: LLMClient, history: list[dict[str, Any]]) -> None:
+def _repl(
+    client: LLMClient,
+    history: list[dict[str, Any]],
+    skills: list[SkillDef],
+    *,
+    system_prompt: str | None = None,
+    append_system_prompt: str | None = None,
+    agent_md_path: str | None = "AGENT.md",
+) -> None:
     while True:
         try:
             raw = _console.input("[bold green]You:[/] ")
@@ -58,14 +208,20 @@ def _repl(client: LLMClient, history: list[dict[str, Any]]) -> None:
 
         # Commands start with '/'
         if raw.startswith("/"):
-            result = handle_command(raw, history, client)
+            result = handle_command(raw, history, client, skills=skills)
             if result is False:
                 break
             continue
 
         # --- Regular message ---
         tools = get_tool_defs()
-        system = build_system_prompt(tools)
+        system = build_system_prompt(
+            tools,
+            skills=skills,
+            agent_md_path=agent_md_path,
+            system_prompt=system_prompt,
+            append_system_prompt=append_system_prompt,
+        )
 
         # Record the user message in history *before* the turn,
         # so it appears in the log and in future conversation context.
@@ -77,7 +233,16 @@ def _repl(client: LLMClient, history: list[dict[str, Any]]) -> None:
         # Tool calling loop: keep sending tool results until the model
         # responds with text instead of tool calls.
         try:
-            _handle_turn(client, messages, tools, history)
+            _handle_turn(
+                client,
+                messages,
+                tools,
+                history,
+                skills,
+                system_prompt=system_prompt,
+                append_system_prompt=append_system_prompt,
+                agent_md_path=agent_md_path,
+            )
         except LLMError as exc:
             _console.print(f"\n[red]Error:[/] {exc}")
             continue
@@ -95,6 +260,12 @@ def _handle_turn(
     messages: list[ChatMessage],
     tools: list[ToolDef],
     history: list[dict[str, Any]],
+    skills: list[SkillDef],
+    *,
+    system_prompt: str | None = None,
+    append_system_prompt: str | None = None,
+    agent_md_path: str | None = "AGENT.md",
+    print_mode: bool = False,
 ) -> None:
     """Process a single user turn, including any tool call round-trips."""
     rounds = 0
@@ -141,17 +312,20 @@ def _handle_turn(
                     highlight=False,
                 )
 
-                result = _execute_tool_with_confirmation(fn_name, fn_args)
+                result = _execute_tool_with_confirmation(
+                    fn_name, fn_args, print_mode=print_mode
+                )
 
-                if result.is_error:
-                    _console.print(f"  [red]✗ {result.content[:120]}[/]")
-                else:
-                    preview = result.content[:120].replace("\n", " ")
-                    _console.print(
-                        f"  [dim green]→ {preview}…[/]"
-                        if len(result.content) > 120
-                        else f"  [dim green]→ {preview}[/]"
-                    )
+                if not print_mode:
+                    if result.is_error:
+                        _console.print(f"  [red]✗ {result.content[:120]}[/]")
+                    else:
+                        preview = result.content[:120].replace("\n", " ")
+                        _console.print(
+                            f"  [dim green]→ {preview}…[/]"
+                            if len(result.content) > 120
+                            else f"  [dim green]→ {preview}[/]"
+                        )
 
                 history.append(
                     {
@@ -163,7 +337,13 @@ def _handle_turn(
 
             # Rebuild messages with new history for next round
             messages = build_messages(
-                build_system_prompt(tools),
+                build_system_prompt(
+                    tools,
+                    skills=skills,
+                    agent_md_path=agent_md_path,
+                    system_prompt=system_prompt,
+                    append_system_prompt=append_system_prompt,
+                ),
                 history,
                 "",  # no new user message, continue tool loop
             )
@@ -182,7 +362,11 @@ def _handle_turn(
         return
 
     # Safety limit reached
-    _console.print("\n[red]⚠ Max tool-calling rounds reached. Stopping.[/]")
+    msg = "⚠ Max tool-calling rounds reached. Stopping."
+    if print_mode:
+        sys.stdout.write(f"\n[{msg}]\n")
+    else:
+        _console.print(f"\n[red]{msg}[/]")
     history.append(
         {
             "role": "assistant",
@@ -199,11 +383,22 @@ def _handle_turn(
 def _execute_tool_with_confirmation(
     fn_name: str,
     fn_args: dict[str, Any],
+    *,
+    print_mode: bool = False,
 ) -> ToolResult:
-    """Execute a tool, handling ``needs_confirmation`` with user prompt loop."""
+    """Execute a tool, handling ``needs_confirmation`` with user prompt loop.
+
+    In *print_mode*, confirmations are auto-denied (no interactive user).
+    """
     result = execute_tool(fn_name, fn_args)
 
     while result.needs_confirmation:
+        if print_mode:
+            msg = result.confirmation_message.split("\n")[0]
+            return ToolResult(
+                content=f"Blocked (print mode): {msg}",
+                is_error=True,
+            )
         _console.print()
         _console.print(
             Panel(
@@ -231,6 +426,20 @@ def _execute_tool_with_confirmation(
             )
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Streaming renderer
+# ---------------------------------------------------------------------------
+
+
+def _render_delta_plain(delta: StreamingDelta) -> None:
+    """Render a streaming delta chunk in plain mode (just the text)."""
+    if delta.tool_calls:
+        return
+    if delta.delta:
+        sys.stdout.write(delta.delta)
+        sys.stdout.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -285,10 +494,3 @@ def _render_delta(delta: StreamingDelta) -> None:
         _render_delta.thinking_emitted = False
         _render_delta.content_started = False
 
-
-# ---------------------------------------------------------------------------
-# CLI entry point
-# ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    app()

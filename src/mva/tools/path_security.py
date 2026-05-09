@@ -8,28 +8,10 @@ The REPL loop then prompts the user for confirmation before executing.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
 
-
-# ---------------------------------------------------------------------------
-# Result type
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class SecurityCheck:
-    """Result of a path security check."""
-
-    safe: bool
-    """``True`` if the operation is safe to proceed without confirmation."""
-
-    message: str = ""
-    """Human-readable explanation of the risk (for the confirmation prompt)."""
-
-    offending_path: str = ""
-    """The specific path that triggered the warning."""
+from mva.tools.base import SecurityCheck
 
 
 # ---------------------------------------------------------------------------

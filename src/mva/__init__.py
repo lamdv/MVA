@@ -1,5 +1,5 @@
-from .cli import app
+from .cli import _app
 
 
 def main():
-    app()
+    _app()
