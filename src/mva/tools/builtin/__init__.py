@@ -9,6 +9,7 @@ from __future__ import annotations
 from mva.tools.registry import ToolRegistry
 
 from .bash import BashTool
+from .edit import EditTool
 from .list_files import ListFilesTool
 from .read import ReadTool
 from .write import WriteTool
@@ -18,6 +19,7 @@ def register_all(registry: ToolRegistry) -> None:
     """Register all built-in tools on *registry*."""
     registry.register(ReadTool())
     registry.register(WriteTool())
+    registry.register(EditTool())
     registry.register(ListFilesTool())
     registry.register(BashTool())
 

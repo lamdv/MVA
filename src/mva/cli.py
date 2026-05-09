@@ -293,6 +293,7 @@ def _handle_turn(
                 "role": "assistant",
                 "content": final_delta.accumulated or "",
                 "tool_calls": final_tool_calls,
+                "reasoning_content": final_delta.reasoning_content,
             }
             history.append(assistant_entry)
 
@@ -352,11 +353,12 @@ def _handle_turn(
             continue
 
         # Model responded with text — done
-        if final_delta and final_delta.accumulated:
+        if final_delta and (final_delta.accumulated or final_delta.reasoning_content):
             history.append(
                 {
                     "role": "assistant",
                     "content": final_delta.accumulated,
+                    "reasoning_content": final_delta.reasoning_content,
                 }
             )
         return

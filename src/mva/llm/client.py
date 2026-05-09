@@ -41,6 +41,7 @@ class ChatMessage:
     content: str | list[dict[str, Any]]
     tool_call_id: str | None = None  # for tool role
     tool_calls: list[dict[str, Any]] | None = None  # for assistant role
+    reasoning_content: str | None = None  # DeepSeek thinking mode
 
 
 @dataclass
@@ -199,13 +200,14 @@ class LLMClient:
         body: dict[str, Any] = {
             "model": model,
             "messages": [_message_to_dict(m) for m in messages],
-            "max_tokens": max_tokens,
             "temperature": temperature,
             "top_p": top_p,
             "presence_penalty": presence_penalty,
             "frequency_penalty": frequency_penalty,
         }
 
+        if max_tokens > 0:
+            body["max_tokens"] = max_tokens
         if stop is not None:
             body["stop"] = stop
         if logprobs is not None:
@@ -220,11 +222,15 @@ class LLMClient:
 
         body.update(extra_params)
 
-        raw: dict[str, Any] = dict()
-
         try:
             resp = self._session.post(url, json=body, timeout=self.timeout)
-            resp.raise_for_status()
+            if not resp.ok:
+                detail = resp.text[:500] if resp.text else "(no body)"
+                request_dump = json.dumps(body, indent=2, default=str)[:2000]
+                raise LLMError(
+                    f"Chat completion failed (HTTP {resp.status_code}): {detail}\n"
+                    f"Request body:\n{request_dump}"
+                )
             raw = resp.json()
         except requests.RequestException as exc:
             raise LLMError(f"Chat completion request failed: {exc}") from exc
@@ -284,7 +290,6 @@ class LLMClient:
         body: dict[str, Any] = {
             "model": model,
             "messages": [_message_to_dict(m) for m in messages],
-            "max_tokens": max_tokens,
             "temperature": temperature,
             "top_p": top_p,
             "presence_penalty": presence_penalty,
@@ -292,6 +297,8 @@ class LLMClient:
             "stream": True,
         }
 
+        if max_tokens > 0:
+            body["max_tokens"] = max_tokens
         if stop is not None:
             body["stop"] = stop
         if seed is not None:
@@ -311,7 +318,13 @@ class LLMClient:
 
         try:
             resp = self._session.post(url, json=body, stream=True, timeout=self.timeout)
-            resp.raise_for_status()
+            if not resp.ok:
+                detail = resp.text[:500] if resp.text else "(no body)"
+                request_dump = json.dumps(body, indent=2, default=str)[:2000]
+                raise LLMError(
+                    f"Streaming request failed (HTTP {resp.status_code}): {detail}\n"
+                    f"Request body:\n{request_dump}"
+                )
 
             for raw_line in resp.iter_lines():
                 if not raw_line:
@@ -366,23 +379,14 @@ class LLMClient:
                 tool_calls: list[dict[str, Any]] = []
                 for idx in sorted(tool_calls_by_idx.keys()):
                     entry = tool_calls_by_idx[idx]
-                    name = entry["function"]["name"]
                     args_str = entry["function"]["arguments"]
-                    try:
-                        parsed_args = json.loads(args_str) if args_str else {}
-                    except json.JSONDecodeError:
-                        parsed_args = args_str  # keep raw if incomplete
                     tool_calls.append(
                         {
                             "id": entry["id"],
                             "type": "function",
                             "function": {
-                                "name": name,
-                                "arguments": (
-                                    parsed_args
-                                    if isinstance(parsed_args, dict)
-                                    else args_str
-                                ),
+                                "name": entry["function"]["name"],
+                                "arguments": args_str,
                             },
                         }
                     )
@@ -418,6 +422,7 @@ class LLMClient:
                     finish_reason=finish,
                     usage=usage,
                     tool_calls=tool_calls if tool_calls else None,
+                    reasoning_content=acc_thinking if acc_thinking else None,
                 )
 
         except requests.RequestException as exc:
@@ -483,6 +488,7 @@ class StreamingDelta:
     accumulated: str = ""  # full regular response text so far (no thinking)
     thinking_delta: str = ""  # thinking / reasoning text fragment in *this* chunk
     thinking: str = ""  # full thinking / reasoning text so far
+    reasoning_content: str | None = None  # full reasoning to echo back (DeepSeek)
     finish_reason: str | None = None
     usage: CompletionUsage | None = None
     tool_calls: list[dict[str, Any]] | None = None  # accumulated tool calls
@@ -500,6 +506,8 @@ def _message_to_dict(m: ChatMessage) -> dict[str, Any]:
         d["tool_call_id"] = m.tool_call_id
     if m.tool_calls is not None:
         d["tool_calls"] = m.tool_calls
+    if m.reasoning_content is not None:
+        d["reasoning_content"] = m.reasoning_content
     return d
 
 

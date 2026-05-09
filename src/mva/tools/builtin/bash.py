@@ -44,10 +44,9 @@ def _set_resource_limits() -> None:
         import resource
 
         mb = 1024 * 1024
-        resource.setrlimit(resource.RLIMIT_AS, (256 * mb, 256 * mb))
-        resource.setrlimit(resource.RLIMIT_CPU, (10, 10))
-        resource.setrlimit(resource.RLIMIT_FSIZE, (10 * mb, 10 * mb))
-        resource.setrlimit(resource.RLIMIT_NPROC, (50, 50))
+        resource.setrlimit(resource.RLIMIT_AS, (512 * mb, 512 * mb))
+        resource.setrlimit(resource.RLIMIT_CPU, (30, 30))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (50 * mb, 50 * mb))
     except (ImportError, ValueError, OSError):
         pass
 
@@ -186,10 +185,9 @@ class BashTool(Tool):
         timed_out = False
         raw_output = b""
 
+        _timeout = timeout if timeout else 30  # default 30s safety net
         try:
-            raw_output, _ = proc.communicate(
-                timeout=timeout if timeout is not None else None,
-            )
+            raw_output, _ = proc.communicate(timeout=_timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
             _kill_process_tree(proc.pid)
@@ -224,7 +222,7 @@ class BashTool(Tool):
 
         suffix = ""
         if timed_out:
-            suffix += f"\n[Command timed out after {timeout}s]"
+            suffix += f"\n[Command timed out after {_timeout}s]"
         if exit_code not in (None, 0):
             suffix += f"\n[Exited with code {exit_code}]"
         if full_path:

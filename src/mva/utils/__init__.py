@@ -43,8 +43,7 @@ def install_signal_handler() -> None:
 
 
 def _signal_handler(signum: int, _frame: Any) -> None:
-    print()
-    goodbye()
+    goodbye(interrupted=True)
     sys.exit(0)
 
 
@@ -64,9 +63,12 @@ def print_header(*, skills: list[SkillDef] | None = None) -> None:
     _console.print(Panel(table, border_style="blue", padding=(1, 2)))
 
 
-def goodbye() -> None:
+def goodbye(*, interrupted: bool = False) -> None:
     print()
-    _console.print("[dim]Goodbye![/]")
+    if interrupted:
+        _console.print("[dim]Interrupted. Goodbye![/]")
+    else:
+        _console.print("[dim]Goodbye![/]")
 
 
 def print_help() -> None:
@@ -266,6 +268,13 @@ def build_messages(
                 role="assistant",
                 content=content or "",
                 tool_calls=turn["tool_calls"],
+                reasoning_content=turn.get("reasoning_content"),
+            ))
+        elif role == "assistant":
+            messages.append(ChatMessage(
+                role="assistant",
+                content=content,
+                reasoning_content=turn.get("reasoning_content"),
             ))
         else:
             messages.append(ChatMessage(role=role, content=content))
