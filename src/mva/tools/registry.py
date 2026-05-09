@@ -155,7 +155,7 @@ class ToolRegistry:
         return self._tools.get(name)
 
     def list_defs(self) -> list[Any]:
-        """Return :class:`~mva.llm.ToolDef` objects for all registered tools.
+        """Return :class:`~mva.agent.ToolDef` objects for all registered tools.
 
         Aliases (different name, same underlying tool) are included as
         separate definitions.
@@ -256,6 +256,21 @@ class ToolRegistry:
                     continue
                 mod = importlib.util.module_from_spec(spec)
                 spec.loader.exec_module(mod)
+            except ImportError as exc:
+                # Check if the module declared its dependencies
+                missing = _get_missing_dep_name(str(exc))
+                if missing:
+                    print(
+                        f"  [yellow]⚠ {py_file.name}[/]: missing dependency"
+                        f" `{missing}`."
+                        f" Install with: [bold]uv pip install {missing}[/]"
+                    )
+                else:
+                    print(
+                        f"  [yellow]⚠ {py_file.name}[/]: import failed —"
+                        f" {exc.name}"
+                    )
+                continue
             except Exception:
                 continue
 
@@ -320,6 +335,8 @@ def _tool_from_module(mod: Any, fallback_name: str) -> Tool | None:
     * ``prompt_snippet`` — ``str``, one-liner for the system prompt
     * ``check_security(**kwargs)`` — callable, returns ``None`` (safe) or
       a :class:`SecurityCheck` / ``dict`` with ``safe=False``
+    * ``dependencies`` — ``list[str]``, PEP 508 dependency strings that
+      this tool needs (used for error messages when imports fail).
 
     Returns a :class:`FunctionTool` wrapping the module, or ``None`` if
     the module doesn't match the convention.
@@ -376,6 +393,21 @@ def _tool_from_module(mod: Any, fallback_name: str) -> Tool | None:
         tool.check_security = _wrapped_check  # type: ignore[method-assign]
 
     return tool
+
+
+def _get_missing_dep_name(msg: str) -> str | None:
+    """Try to extract the missing package name from an ImportError message.
+
+    Handles common patterns like:
+    * "No module named 'requests'"
+    * "cannot import name 'X' from 'Y'"
+    * "No module named requests"
+    """
+    import re
+    m = re.search(r"named\s+'?(\w[\w.-]*)" , msg)
+    if m:
+        return m.group(1)
+    return None
 
 
 def _confirm_result(

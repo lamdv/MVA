@@ -24,7 +24,7 @@ def register_all(registry: ToolRegistry) -> None:
     registry.register(BashTool())
 
     # 'ls' alias — same executor, distinct tool definition
-    from mva.llm import ToolDef
+    from mva.agent import ToolDef
 
     ls_def = ToolDef(
         name="ls",

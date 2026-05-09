@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from mva.llm import ToolDef
+from mva.agent import ToolDef
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ class Tool(ABC):
     """Optional one-liner for the system prompt's tool list."""
 
     def to_tool_def(self) -> ToolDef:
-        """Convert this tool into a :class:`~mva.llm.ToolDef` for the API."""
+        """Convert this tool into a :class:`~mva.agent.ToolDef` for the API."""
         return ToolDef(
             name=self.name,
             description=self.description,

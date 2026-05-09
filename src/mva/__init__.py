@@ -1,4 +1,4 @@
-from .cli import _app
+from mva.cli import _app
 
 
 def main():

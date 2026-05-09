@@ -3,29 +3,12 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Generator
 
 import requests
 
-# ---------------------------------------------------------------------------
-# Auto-load .env if python-dotenv is available
-# ---------------------------------------------------------------------------
-
-
-def _load_dotenv() -> None:
-    """Load environment variables from a ``.env`` file in the CWD."""
-    try:
-        from dotenv import load_dotenv
-
-        load_dotenv(Path.cwd() / ".env")
-    except ImportError:
-        pass
-
-
-_load_dotenv()
+from mva.config import ConfigError, load_config
 
 
 # ---------------------------------------------------------------------------
@@ -93,12 +76,13 @@ class ToolDef:
 class LLMClient:
     """A client for sending chat completion requests to an OpenAI-compatible API.
 
-    Reads configuration from environment variables by default:
-        LLM_BASE_URL   – base URL of the inference server (e.g. ``http://127.0.0.1:8002/v1``)
-        LLM_API_KEY    – API key (use ``"no-key"`` for local servers)
-        DEFAULT_MODEL  – default model name passed to the server
+    Configuration is resolved in the following priority order:
 
-    All values can be overridden via constructor arguments.
+    1. Constructor arguments (``base_url``, ``api_key``, ``default_model``)
+    2. ``model.yaml`` (see :mod:`mva.config` for discovery)
+    3. Environment variables (legacy fallback — ``LLM_BASE_URL``,
+       ``LLM_API_KEY``, ``DEFAULT_MODEL``)
+    4. Hard-coded defaults
     """
 
     def __init__(
@@ -106,22 +90,43 @@ class LLMClient:
         base_url: str | None = None,
         api_key: str | None = None,
         default_model: str | None = None,
-        timeout: int = 120,  # seconds
+        timeout: int | None = None,  # seconds
     ) -> None:
+        # Load from model.yaml (or env fallback)
+        try:
+            cfg = load_config()
+            provider_cfg = cfg.providers.get(cfg.provider)
+        except ConfigError:
+            cfg = None
+            provider_cfg = None
+
+        self._config_cfg = cfg  # keep for runtime queries
+        self.current_provider: str | None = (
+            str(cfg.provider) if cfg else None
+        )
+        self._available_models: list[str] = (
+            list(provider_cfg.models) if provider_cfg else []
+        )
         self.base_url = (
             base_url
-            if base_url is not None
-            else os.environ.get("LLM_BASE_URL", "http://127.0.0.1:8002/v1")
+            or (provider_cfg and provider_cfg.base_url)
+            or "http://127.0.0.1:8002/v1"
         ).rstrip("/")
         self.api_key = (
-            api_key if api_key is not None else os.environ.get("LLM_API_KEY", "no-key")
+            api_key
+            or (provider_cfg and provider_cfg.api_key)
+            or "no-key"
         )
         self.default_model = (
             default_model
-            if default_model is not None
-            else os.environ.get("DEFAULT_MODEL", "")
+            or (provider_cfg and provider_cfg.default_model)
+            or ""
         )
-        self.timeout = timeout
+        self.timeout = (
+            timeout
+            or (provider_cfg and provider_cfg.timeout)
+            or 120
+        )
 
         self._session = requests.Session()
         self._session.headers.update(
@@ -130,6 +135,95 @@ class LLMClient:
                 "Content-Type": "application/json",
             }
         )
+
+    # -- Runtime reconfiguration -------------------------------------------
+
+    def reconfigure(
+        self,
+        *,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        default_model: str | None = None,
+        timeout: int | None = None,
+    ) -> None:
+        """Reconfigure the client at runtime (e.g. after provider switch).
+
+        Parameters
+        ----------
+        base_url:
+            New base URL. ``None`` leaves the current value unchanged.
+        api_key:
+            New API key. ``None`` leaves the current value unchanged.
+        default_model:
+            New default model. ``None`` leaves the current value unchanged.
+        timeout:
+            New timeout in seconds. ``None`` leaves the current value unchanged.
+        """
+        if base_url is not None:
+            self.base_url = base_url.rstrip("/")
+        if api_key is not None:
+            self.api_key = api_key
+            self._session.headers.update(
+                {"Authorization": f"Bearer {self.api_key}"}
+            )
+        if default_model is not None:
+            self.default_model = default_model
+        if timeout is not None:
+            self.timeout = timeout
+
+    def switch_provider(self, provider_name: str) -> bool:
+        """Switch to a different provider from the config file.
+
+        Re-loads ``model.yaml`` and applies the named provider's
+        configuration.  Returns ``True`` on success, ``False`` if the
+        provider is not found.
+
+        This is a convenience wrapper around :func:`reload_config` and
+        :meth:`reconfigure`.
+
+        The provider's ``models`` list (if any) is stored in
+        *available_models* for UI discovery.
+        """
+        from mva.config import get_active_provider, reload_config  # noqa: PLC0415
+
+        try:
+            cfg = reload_config()
+        except Exception:
+            return False
+
+        if provider_name not in cfg.providers:
+            return False
+
+        provider = cfg.providers[provider_name]
+        self.reconfigure(
+            base_url=provider.base_url,
+            api_key=provider.api_key,
+            default_model=provider.default_model,
+            timeout=provider.timeout,
+        )
+        self.current_provider = provider_name
+        self._available_models = list(provider.models)
+        return True
+
+    def set_model(self, model_name: str) -> bool:
+        """Set the active model within the current provider.
+
+        If *available_models* is non-empty, *model_name* must appear in
+        that list.  When the list is empty, the model is set
+        unconditionally (backward-compatible behaviour).
+
+        Returns ``True`` on success.
+        """
+        if self._available_models and model_name not in self._available_models:
+            return False
+        self.default_model = model_name
+        return True
+
+    @property
+    def available_models(self) -> list[str]:
+        """Return the list of available model names for the current
+        provider (may be empty if none were declared in config)."""
+        return list(self._available_models)
 
     # -- Public API ---------------------------------------------------------
 
@@ -285,6 +379,9 @@ class LLMClient:
                 "A model must be specified via argument or DEFAULT_MODEL env var."
             )
 
+        # Lazy import to avoid circular dependency with mva.utils
+        from mva.utils import is_cancel_requested  # noqa: PLC0415
+
         url = f"{self.base_url}/chat/completions"
 
         body: dict[str, Any] = {
@@ -315,6 +412,7 @@ class LLMClient:
         acc_thinking = ""
         tool_calls_by_idx: dict[int, dict[str, Any]] = {}
         resp = None
+        cancelled = False
 
         try:
             resp = self._session.post(url, json=body, stream=True, timeout=self.timeout)
@@ -327,6 +425,10 @@ class LLMClient:
                 )
 
             for raw_line in resp.iter_lines():
+                if is_cancel_requested():
+                    cancelled = True
+                    break
+
                 if not raw_line:
                     continue
                 line = raw_line.decode("utf-8").strip()
@@ -429,7 +531,21 @@ class LLMClient:
             raise LLMError(f"Streaming request failed: {exc}") from exc
         finally:
             if resp is not None:
-                resp.close()
+                try:
+                    resp.close()
+                except Exception:
+                    pass  # connection may already be torn down on cancel
+
+        # Emit a cancellation marker so the caller can react gracefully
+        if cancelled:
+            yield StreamingDelta(
+                finish_reason="cancelled",
+                accumulated=acc_content,
+                thinking=acc_thinking,
+                reasoning_content=acc_thinking if acc_thinking else None,
+                delta="",
+                tool_calls=None,
+            )
 
     # -- Internal helpers ---------------------------------------------------
 
@@ -532,8 +648,4 @@ class LLMError(Exception):
     """Base exception for LLM client errors."""
 
 
-# ---------------------------------------------------------------------------
-# Clean-up auto-load trace to not pollute public namespace
-# ---------------------------------------------------------------------------
-
-del _load_dotenv
+# (no cleanup needed)

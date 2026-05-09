@@ -6,7 +6,8 @@ readme = "README.md"
 authors = [{ name = "ldang", email = "lam.dv@live.com" }]
 requires-python = ">=3.13"
 dependencies = [
-  "python-dotenv>=1.0.0",
+  "prompt-toolkit>=3.0.52",
+  "pyyaml>=6.0.0",
   "requests>=2.31.0",
   "rich>=15.0.0",
   "streamlit>=1.57.0",

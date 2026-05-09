@@ -26,7 +26,7 @@ Clone the repository and sync the environment using `uv`:
 
 ```bash
 # Clone the repo
-git clone <your-repo-url>
+git clone https://github.com/lamdv/MVA.git
 cd mva
 
 # Install dependencies and create virtual environment
@@ -38,7 +38,7 @@ uv sync
 Launch the interactive REPL directly:
 
 ```bash
-uv run --package mva python -m mva
+uv run mva
 ```
 
 ## 🛠 Built-in Tools

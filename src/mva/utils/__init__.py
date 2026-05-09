@@ -15,7 +15,7 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from mva.llm import ChatMessage, LLMClient, ToolDef
+from mva.agent import ChatMessage, LLMClient, ToolDef
 from mva.skills import SkillDef, build_skills_prompt, discover_skills
 from mva.tools import execute_tool, get_tool_defs
 
@@ -38,13 +38,46 @@ DEFAULT_SYSTEM_PROMPT = (
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Stream cancellation support
+# ---------------------------------------------------------------------------
+
+_streaming_active = False
+_cancel_requested = False
+
+
+def _mark_streaming_start() -> None:
+    """Mark that a streaming response is in progress (called from CLI)."""
+    global _streaming_active, _cancel_requested
+    _streaming_active = True
+    _cancel_requested = False
+
+
+def _mark_streaming_stop() -> None:
+    """Mark that streaming has ended."""
+    global _streaming_active
+    _streaming_active = False
+
+
+def is_cancel_requested() -> bool:
+    """Check whether the user has requested cancellation of the current stream."""
+    return _cancel_requested
+
+
 def install_signal_handler() -> None:
     signal.signal(signal.SIGINT, _signal_handler)
 
 
 def _signal_handler(signum: int, _frame: Any) -> None:
-    goodbye(interrupted=True)
-    sys.exit(0)
+    global _cancel_requested
+    if _streaming_active:
+        # During streaming: request cancellation instead of exiting.
+        # The streaming loop will stop gracefully and return to the REPL.
+        _cancel_requested = True
+    else:
+        # Idle / waiting for input: exit as before.
+        goodbye(interrupted=True)
+        sys.exit(0)
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +112,10 @@ def print_help() -> None:
     table.add_row("/clear, /reset", "Clear conversation history")
     table.add_row("/help", "Show this help message")
     table.add_row("/history", "Show recent conversation history")
+    table.add_row("/model", "Show current model and list available models")
+    table.add_row("/model <name>", "Switch model within the current provider")
+    table.add_row("/provider, /providers", "List available providers")
+    table.add_row("/provider <name>", "Switch to a different provider")
     table.add_row("/tools", "List available tools")
     table.add_row("/skills", "List available skills")
     table.add_row("/skill:<name>", "Enable/disable a skill")
@@ -310,6 +347,22 @@ def handle_command(
         print_help()
         return True
 
+    if cmd == "model":
+        _print_model_info(client)
+        return True
+
+    if cmd.startswith("model "):
+        _switch_model(client, cmd[6:].strip())
+        return True
+
+    if cmd in ("provider", "providers"):
+        _list_providers(client)
+        return True
+
+    if cmd.startswith("provider "):
+        _switch_provider(client, cmd[9:].strip())
+        return True
+
     if cmd == "tools":
         _print_tools()
         return True
@@ -397,3 +450,156 @@ def _toggle_skill(skills: list[SkillDef], name: str) -> None:
             return
     _console.print(f"[yellow]Unknown skill:[/] {name}")
     _console.print("Use [bold]/skills[/] to see available skills.")
+
+
+# ---------------------------------------------------------------------------
+# Model / provider commands
+# ---------------------------------------------------------------------------
+
+
+def _print_model_info(client: LLMClient) -> None:
+    """Print current provider/model and list all models for this provider."""
+    prov = client.current_provider or "(unknown)"
+    model = client.default_model or "(no default model)"
+    url = client.base_url
+
+    table = Table(title="Current Model", title_style="bold", box=None)
+    table.add_column("Setting", style="cyan")
+    table.add_column("Value", style="white")
+    table.add_row("Provider", prov)
+    table.add_row("Model", model)
+    table.add_row("Base URL", url)
+    _console.print(table)
+
+    # Always try to show available models for the current provider
+    available = client.available_models
+    if available:
+        models_table = Table(
+            title=f"Models — {prov}", title_style="bold", box=None
+        )
+        models_table.add_column("Status", style="bold", width=10)
+        models_table.add_column("Model", style="cyan")
+        for m in available:
+            status = "[green]● ACTIVE[/]" if m == model else "[dim]○[/]"
+            models_table.add_row(status, m)
+        _console.print(models_table)
+        _console.print(
+            "[dim]Use /model <name> to switch model,"
+            " /provider <name> to switch provider.[/]"
+        )
+    else:
+        _console.print(
+            "[dim]No models list defined for this provider.[/]"
+        )
+        _console.print(
+            "[dim]Add a 'models:' list to the provider in model.yaml.[/]"
+        )
+
+
+def _switch_model(client: LLMClient, target: str) -> None:
+    """Switch to a different model within the current provider.
+
+    ``/model <name>`` — uses the model name directly (must be in the
+    current provider's ``available_models`` list, or any model if the
+    list is not defined).
+    """
+    target = target.strip()
+    if not target:
+        _console.print("[yellow]Usage:[/] /model <model_name>")
+        _print_model_info(client)
+        return
+
+    if client.set_model(target):
+        _console.print(
+            f"[green]Model set to '{target}'"
+            f" (provider: {client.current_provider}).[/]"
+        )
+        _print_model_info(client)
+    else:
+        available = client.available_models
+        if available:
+            _console.print(
+                f"[yellow]Unknown model:[/] '{target}'."
+                f" Available: {', '.join(available)}"
+            )
+        else:
+            _console.print(
+                f"[yellow]Model '{target}' not found in current"
+                f" provider '{client.current_provider}'.[/]"
+            )
+        _print_model_info(client)
+
+
+def _switch_provider(client: LLMClient, target: str) -> None:
+    """Switch to a different provider from config.
+
+    ``/provider <name>`` — switch provider (and use its default_model).
+
+    Supports ``provider/model`` syntax to also pick a specific model::
+
+        /provider deepseek/deepseek-reasoner
+    """
+    target = target.strip()
+    if not target:
+        _console.print(
+            "[yellow]Usage:[/] /provider <provider>  or  /provider <provider>/<model>"
+        )
+        _list_providers(client)
+        return
+
+    if "/" in target:
+        provider_name, model_name = target.split("/", 1)
+        provider_name = provider_name.strip()
+        model_name = model_name.strip()
+    else:
+        provider_name = target
+        model_name = None
+
+    if client.switch_provider(provider_name):
+        _console.print(
+            f"[green]Switched to provider '{provider_name}'.[/]"
+        )
+        if model_name:
+            if client.set_model(model_name):
+                _console.print(
+                    f"[green]Model set to '{model_name}'.[/]"
+                )
+            else:
+                _console.print(
+                    f"[yellow]Model '{model_name}' not found in"
+                    f" provider '{provider_name}'.[/]"
+                )
+        _print_model_info(client)
+    else:
+        _console.print(
+            f"[yellow]Unknown provider:[/] '{provider_name}'."
+        )
+        _list_providers(client)
+
+
+def _list_providers(client: LLMClient) -> None:
+    """List all available providers from the config file."""
+    from mva.config import load_config  # noqa: PLC0415
+
+    try:
+        cfg = load_config()
+    except Exception:
+        _console.print("[dim]No configuration loaded (using env fallback).[/]")
+        _console.print(
+            "[dim]Set up .mva/model.yaml to define multiple providers.[/]"
+        )
+        return
+
+    active = cfg.provider
+    table = Table(title="Available Providers", title_style="bold", box=None)
+    table.add_column("Status", style="bold", width=10)
+    table.add_column("Provider", style="cyan")
+    table.add_column("Default Model", style="white")
+    table.add_column("Models", style="dim")
+    table.add_column("Base URL", style="dim")
+    for name, p in cfg.providers.items():
+        status = "[green]● ACTIVE[/]" if name == active else "[dim]○[/]"
+        default_m = p.default_model or "(default)"
+        models_str = ", ".join(p.models) if p.models else "—"
+        table.add_row(status, name, default_m, models_str, p.base_url)
+    _console.print(table)
