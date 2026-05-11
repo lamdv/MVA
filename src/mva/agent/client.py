@@ -1,63 +1,39 @@
-"""OpenAI-compatible LLM chat completion client with tool calling."""
+"""OpenAI-compatible LLM chat completion client — pure HTTP transport.
+
+This module contains a minimal HTTP client for OpenAI-compatible chat
+completion APIs.  It has **no knowledge of config files, provider
+switching, or model management** — those belong in the session layer.
+
+Usage::
+
+    client = LLMClient(
+        base_url="http://127.0.0.1:8002/v1",
+        api_key="no-key",
+        default_model="gpt-4o",
+        timeout=120,
+    )
+    for delta in client.chat_stream(messages, tools=[...]):
+        print(delta.delta)
+"""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
 from typing import Any, Generator
 
 import requests
 
-from mva.config import ConfigError, load_config
+from mva.agent.types import (
+    ChatMessage,
+    ChatResponse,
+    CompletionUsage,
+    LLMError,
+    StreamingDelta,
+    message_to_dict,
+    parse_chat_response,
+    tool_to_dict,
+)
 from mva.agent.tools import ToolDef
-
-
-# ---------------------------------------------------------------------------
-# Types
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ChatMessage:
-    """A single message in a chat conversation."""
-
-    role: str  # "system", "user", "assistant", "tool"
-    content: str | list[dict[str, Any]]
-    tool_call_id: str | None = None  # for tool role
-    tool_calls: list[dict[str, Any]] | None = None  # for assistant role
-    reasoning_content: str | None = None  # DeepSeek thinking mode
-
-
-@dataclass
-class ChatChoice:
-    """A single choice returned by the chat completions endpoint."""
-
-    message: ChatMessage
-    index: int = 0
-    finish_reason: str | None = None
-    logprobs: Any = None
-
-
-@dataclass
-class CompletionUsage:
-    """Token usage information."""
-
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-    total_tokens: int = 0
-
-
-@dataclass
-class ChatResponse:
-    """Full response from a v1/chat/completions call."""
-
-    id: str = ""
-    object: str = "chat.completion"
-    created: int = 0
-    model: str = ""
-    choices: list[ChatChoice] = field(default_factory=list)
-    usage: CompletionUsage | None = None
-    raw: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -66,59 +42,36 @@ class ChatResponse:
 
 
 class LLMClient:
-    """A client for sending chat completion requests to an OpenAI-compatible API.
+    """A thin HTTP client for OpenAI-compatible chat completion APIs.
 
-    Configuration is resolved in the following priority order:
+    This class is a **pure transport layer**: it builds HTTP requests,
+    sends them, and parses responses.  It does **not** load configuration
+    files, manage provider state, or track available models.
 
-    1. Constructor arguments (``base_url``, ``api_key``, ``default_model``)
-    2. ``model.yaml`` (see :mod:`mva.config` for discovery)
-    3. Environment variables (legacy fallback — ``LLM_BASE_URL``,
-       ``LLM_API_KEY``, ``DEFAULT_MODEL``)
-    4. Hard-coded defaults
+    Parameters
+    ----------
+    base_url:
+        Base URL of the inference server
+        (e.g. ``"http://127.0.0.1:8002/v1"``).
+    api_key:
+        API key.  Use ``"no-key"`` for local servers.
+    default_model:
+        Default model identifier sent to the server.
+    timeout:
+        Request timeout in seconds.
     """
 
     def __init__(
         self,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        default_model: str | None = None,
-        timeout: int | None = None,  # seconds
+        base_url: str = "http://127.0.0.1:8002/v1",
+        api_key: str = "no-key",
+        default_model: str = "",
+        timeout: int = 120,
     ) -> None:
-        # Load from model.yaml (or env fallback)
-        try:
-            cfg = load_config()
-            provider_cfg = cfg.providers.get(cfg.provider)
-        except ConfigError:
-            cfg = None
-            provider_cfg = None
-
-        self._config_cfg = cfg  # keep for runtime queries
-        self.current_provider: str | None = (
-            str(cfg.provider) if cfg else None
-        )
-        self._available_models: list[str] = (
-            list(provider_cfg.models) if provider_cfg else []
-        )
-        self.base_url = (
-            base_url
-            or (provider_cfg and provider_cfg.base_url)
-            or "http://127.0.0.1:8002/v1"
-        ).rstrip("/")
-        self.api_key = (
-            api_key
-            or (provider_cfg and provider_cfg.api_key)
-            or "no-key"
-        )
-        self.default_model = (
-            default_model
-            or (provider_cfg and provider_cfg.default_model)
-            or ""
-        )
-        self.timeout = (
-            timeout
-            or (provider_cfg and provider_cfg.timeout)
-            or 120
-        )
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.default_model = default_model
+        self.timeout = timeout
 
         self._session = requests.Session()
         self._session.headers.update(
@@ -128,96 +81,34 @@ class LLMClient:
             }
         )
 
-    # -- Runtime reconfiguration -------------------------------------------
+    # -- Factory helpers ----------------------------------------------------
 
-    def reconfigure(
-        self,
-        *,
-        base_url: str | None = None,
-        api_key: str | None = None,
-        default_model: str | None = None,
-        timeout: int | None = None,
-    ) -> None:
-        """Reconfigure the client at runtime (e.g. after provider switch).
+    @classmethod
+    def from_config(cls) -> LLMClient:
+        """Construct an ``LLMClient`` from ``model.yaml`` (or env fallback).
 
-        Parameters
-        ----------
-        base_url:
-            New base URL. ``None`` leaves the current value unchanged.
-        api_key:
-            New API key. ``None`` leaves the current value unchanged.
-        default_model:
-            New default model. ``None`` leaves the current value unchanged.
-        timeout:
-            New timeout in seconds. ``None`` leaves the current value unchanged.
+        Loads the active provider's configuration via :func:`mva.config.load_config`
+        and returns a client configured accordingly.
+
+        This is the recommended way to create a client in production.
+        Use the constructor directly for testing or custom setups.
         """
-        if base_url is not None:
-            self.base_url = base_url.rstrip("/")
-        if api_key is not None:
-            self.api_key = api_key
-            self._session.headers.update(
-                {"Authorization": f"Bearer {self.api_key}"}
+        from mva.config import load_config  # noqa: PLC0415
+
+        cfg = load_config()
+        provider_cfg = cfg.providers.get(cfg.provider)
+        if provider_cfg is None:
+            raise LLMError(
+                f"Active provider {cfg.provider!r} not found in configuration."
             )
-        if default_model is not None:
-            self.default_model = default_model
-        if timeout is not None:
-            self.timeout = timeout
-
-    def switch_provider(self, provider_name: str) -> bool:
-        """Switch to a different provider from the config file.
-
-        Re-loads ``model.yaml`` and applies the named provider's
-        configuration.  Returns ``True`` on success, ``False`` if the
-        provider is not found.
-
-        This is a convenience wrapper around :func:`reload_config` and
-        :meth:`reconfigure`.
-
-        The provider's ``models`` list (if any) is stored in
-        *available_models* for UI discovery.
-        """
-        from mva.config import get_active_provider, reload_config  # noqa: PLC0415
-
-        try:
-            cfg = reload_config()
-        except Exception:
-            return False
-
-        if provider_name not in cfg.providers:
-            return False
-
-        provider = cfg.providers[provider_name]
-        self.reconfigure(
-            base_url=provider.base_url,
-            api_key=provider.api_key,
-            default_model=provider.default_model,
-            timeout=provider.timeout,
+        return cls(
+            base_url=provider_cfg.base_url,
+            api_key=provider_cfg.api_key,
+            default_model=provider_cfg.default_model,
+            timeout=provider_cfg.timeout,
         )
-        self.current_provider = provider_name
-        self._available_models = list(provider.models)
-        return True
 
-    def set_model(self, model_name: str) -> bool:
-        """Set the active model within the current provider.
-
-        If *available_models* is non-empty, *model_name* must appear in
-        that list.  When the list is empty, the model is set
-        unconditionally (backward-compatible behaviour).
-
-        Returns ``True`` on success.
-        """
-        if self._available_models and model_name not in self._available_models:
-            return False
-        self.default_model = model_name
-        return True
-
-    @property
-    def available_models(self) -> list[str]:
-        """Return the list of available model names for the current
-        provider (may be empty if none were declared in config)."""
-        return list(self._available_models)
-
-    # -- Public API ---------------------------------------------------------
+    # -- Non-streaming chat -------------------------------------------------
 
     def chat(
         self,
@@ -237,7 +128,7 @@ class LLMClient:
         tool_choice: str | dict[str, Any] | None = None,
         **extra_params: Any,
     ) -> ChatResponse:
-        """Send a chat completion request to the OpenAI-compatible API.
+        """Send a chat completion request (non-streaming).
 
         Parameters
         ----------
@@ -247,7 +138,8 @@ class LLMClient:
         model:
             Model identifier. Falls back to *default_model*.
         max_tokens:
-            Maximum number of tokens to generate.
+            Maximum number of tokens to generate.  Use -1 or omit
+            to let the server decide.
         temperature:
             Sampling temperature (0–2).
         top_p:
@@ -278,14 +170,14 @@ class LLMClient:
         model = model or self.default_model
         if not model:
             raise ValueError(
-                "A model must be specified via argument or DEFAULT_MODEL env var."
+                "A model must be specified via argument or default_model."
             )
 
         url = f"{self.base_url}/chat/completions"
 
         body: dict[str, Any] = {
             "model": model,
-            "messages": [_message_to_dict(m) for m in messages],
+            "messages": [message_to_dict(m) for m in messages],
             "temperature": temperature,
             "top_p": top_p,
             "presence_penalty": presence_penalty,
@@ -303,7 +195,7 @@ class LLMClient:
         if user is not None:
             body["user"] = user
         if tools:
-            body["tools"] = [_tool_to_dict(t) for t in tools]
+            body["tools"] = [tool_to_dict(t.name, t.description, t.parameters) for t in tools]
             body["tool_choice"] = tool_choice or "auto"
 
         body.update(extra_params)
@@ -321,9 +213,9 @@ class LLMClient:
         except requests.RequestException as exc:
             raise LLMError(f"Chat completion request failed: {exc}") from exc
 
-        return self._parse_chat_response(raw)
+        return parse_chat_response(raw)
 
-    # -- Convenience helpers ------------------------------------------------
+    # -- Convenience helper -------------------------------------------------
 
     def chat_simple(self, messages: list[ChatMessage], **kwargs: Any) -> str:
         """Send a chat completion and return just the generated text.
@@ -335,7 +227,7 @@ class LLMClient:
             return response.choices[0].message.content
         return ""
 
-    # -- Streaming ----------------------------------------------------------
+    # -- Streaming chat -----------------------------------------------------
 
     def chat_stream(
         self,
@@ -356,19 +248,16 @@ class LLMClient:
     ) -> Generator[StreamingDelta, None, None]:
         """Stream tokens from the chat completions API (SSE).
 
-        Yields :class:`StreamingDelta` for each chunk as it arrives.
-        The final chunk carries ``finish_reason`` and optionally ``usage``.
-
-        Tool calls are accumulated across chunks and emitted as
-        ``tool_call_delta`` events. Fully formed tool calls are available
-        in the last delta's ``tool_calls`` list.
+        Yields a :class:`StreamingDelta` for each SSE chunk as it
+        arrives.  Tool calls are accumulated across chunks and the
+        final delta carries the complete list.
 
         Parameters are identical to :meth:`chat`.
         """
         model = model or self.default_model
         if not model:
             raise ValueError(
-                "A model must be specified via argument or DEFAULT_MODEL env var."
+                "A model must be specified via argument or default_model."
             )
 
         # Lazy import to avoid circular dependency with mva.utils
@@ -378,7 +267,7 @@ class LLMClient:
 
         body: dict[str, Any] = {
             "model": model,
-            "messages": [_message_to_dict(m) for m in messages],
+            "messages": [message_to_dict(m) for m in messages],
             "temperature": temperature,
             "top_p": top_p,
             "presence_penalty": presence_penalty,
@@ -395,7 +284,7 @@ class LLMClient:
         if user is not None:
             body["user"] = user
         if tools:
-            body["tools"] = [_tool_to_dict(t) for t in tools]
+            body["tools"] = [tool_to_dict(t.name, t.description, t.parameters) for t in tools]
             body["tool_choice"] = tool_choice or "auto"
 
         body.update(extra_params)
@@ -407,13 +296,15 @@ class LLMClient:
         cancelled = False
 
         try:
-            resp = self._session.post(url, json=body, stream=True, timeout=self.timeout)
+            resp = self._session.post(
+                url, json=body, stream=True, timeout=self.timeout
+            )
             if not resp.ok:
                 detail = resp.text[:500] if resp.text else "(no body)"
                 request_dump = json.dumps(body, indent=2, default=str)[:2000]
                 raise LLMError(
-                    f"Streaming request failed (HTTP {resp.status_code}): {detail}\n"
-                    f"Request body:\n{request_dump}"
+                    f"Streaming request failed (HTTP {resp.status_code}):"
+                    f" {detail}\nRequest body:\n{request_dump}"
                 )
 
             for raw_line in resp.iter_lines():
@@ -539,105 +430,8 @@ class LLMClient:
                 tool_calls=None,
             )
 
-    # -- Internal helpers ---------------------------------------------------
-
-    @staticmethod
-    def _parse_chat_response(raw: dict[str, Any]) -> ChatResponse:
-        choices = [
-            ChatChoice(
-                message=ChatMessage(
-                    role=ch.get("message", {}).get("role", "assistant"),
-                    content=ch.get("message", {}).get("content", "") or "",
-                    tool_calls=ch.get("message", {}).get("tool_calls"),
-                ),
-                index=ch.get("index", 0),
-                finish_reason=ch.get("finish_reason"),
-                logprobs=ch.get("logprobs"),
-            )
-            for ch in raw.get("choices", [])
-        ]
-
-        usage_raw = raw.get("usage")
-        usage: CompletionUsage | None = None
-        if usage_raw:
-            usage = CompletionUsage(
-                prompt_tokens=usage_raw.get("prompt_tokens", 0),
-                completion_tokens=usage_raw.get("completion_tokens", 0),
-                total_tokens=usage_raw.get("total_tokens", 0),
-            )
-
-        return ChatResponse(
-            id=raw.get("id", ""),
-            object=raw.get("object", "chat.completion"),
-            created=raw.get("created", 0),
-            model=raw.get("model", ""),
-            choices=choices,
-            usage=usage,
-            raw=raw,
-        )
+    # -- Cleanup ------------------------------------------------------------
 
     def close(self) -> None:
         """Close the underlying HTTP session."""
         self._session.close()
-
-
-# ---------------------------------------------------------------------------
-# Streaming types
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class StreamingDelta:
-    """A single streaming chunk from a ``chat_stream()`` call."""
-
-    id: str = ""
-    model: str = ""
-    delta: str = ""  # regular response text fragment in *this* chunk
-    accumulated: str = ""  # full regular response text so far (no thinking)
-    thinking_delta: str = ""  # thinking / reasoning text fragment in *this* chunk
-    thinking: str = ""  # full thinking / reasoning text so far
-    reasoning_content: str | None = None  # full reasoning to echo back (DeepSeek)
-    finish_reason: str | None = None
-    usage: CompletionUsage | None = None
-    tool_calls: list[dict[str, Any]] | None = None  # accumulated tool calls
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
-
-def _message_to_dict(m: ChatMessage) -> dict[str, Any]:
-    """Convert a ChatMessage to the dict format expected by the API."""
-    d: dict[str, Any] = {"role": m.role, "content": m.content}
-    if m.tool_call_id is not None:
-        d["tool_call_id"] = m.tool_call_id
-    if m.tool_calls is not None:
-        d["tool_calls"] = m.tool_calls
-    if m.reasoning_content is not None:
-        d["reasoning_content"] = m.reasoning_content
-    return d
-
-
-def _tool_to_dict(t: ToolDef) -> dict[str, Any]:
-    """Convert a ToolDef to the dict format expected by the API."""
-    return {
-        "type": "function",
-        "function": {
-            "name": t.name,
-            "description": t.description,
-            "parameters": t.parameters,
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
-# Exceptions
-# ---------------------------------------------------------------------------
-
-
-class LLMError(Exception):
-    """Base exception for LLM client errors."""
-
-
-# (no cleanup needed)

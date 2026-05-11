@@ -14,7 +14,7 @@ from rich.console import Console
 from rich.panel import Panel
 
 from mva.cli.renderer import render_event, reset_renderer
-from mva.agent import LLMClient, LLMError, Session, SkillDef, get_tool_defs
+from mva.agent import LLMError, Session, SkillDef, get_tool_defs
 from mva.utils import (
     build_system_prompt,
     goodbye,
@@ -33,11 +33,11 @@ _console = Console()
 _last_model_context: str = ""
 
 
-def _show_model_context(client: LLMClient) -> None:
+def _show_model_context(session: Session) -> None:
     """Show the current model/provider as a subtle one-liner (when it changes)."""
     global _last_model_context  # noqa: PLW0603
-    prov = client.current_provider or "?"
-    model = client.default_model or ""
+    prov = session.current_provider or "?"
+    model = session.client.default_model or ""
     ctx = f"[dim]⚡ {prov}"
     if model:
         ctx += f" / {model}"
@@ -76,9 +76,7 @@ def _confirm_callback(message: str, tool: str, args: dict[str, Any]) -> bool:
 
 def _repl(
     pt_session: PromptSession,
-    client: LLMClient,
-    history: list[dict[str, Any]],
-    agent_session: Session,
+    session: Session,
     skills: list[SkillDef],
     *,
     system_prompt: str | None = None,
@@ -86,7 +84,7 @@ def _repl(
     agent_md_path: str | None = "AGENT.md",
 ) -> None:
     """Interactive REPL: read-eval-print loop for the MVA agent."""
-    agent_session.on_confirm = _confirm_callback
+    session.on_confirm = _confirm_callback
     while True:
         try:
             raw = pt_session.prompt("You: ")
@@ -100,14 +98,14 @@ def _repl(
 
         # Commands start with '/'
         if raw.startswith("/"):
-            result = handle_command(raw, history, client, skills=skills)
+            result = handle_command(raw, session.history, session, skills=skills)
             if result is False:
                 break
             if result is _RELOAD_SENTINEL:
-                reload_environment(agent_session, skills)
+                reload_environment(session, skills)
                 # Rebuild the system prompt immediately so the next
                 # message uses the freshly reloaded tools + skills
-                agent_session.system_prompt = build_system_prompt(
+                session.system_prompt = build_system_prompt(
                     get_tool_defs(),
                     skills=skills,
                     agent_md_path=agent_md_path,
@@ -121,10 +119,10 @@ def _repl(
             continue
 
         # Show current model/provider as a subtle reminder
-        _show_model_context(client)
+        _show_model_context(session)
 
         # Build system prompt (fresh every turn for skill/AGENT.md changes)
-        agent_session.system_prompt = build_system_prompt(
+        session.system_prompt = build_system_prompt(
             get_tool_defs(),
             skills=skills,
             agent_md_path=agent_md_path,
@@ -135,7 +133,7 @@ def _repl(
         reset_renderer()
 
         try:
-            for event in agent_session.chat(raw):
+            for event in session.chat(raw):
                 render_event(event)
         except LLMError as exc:
             _console.print(f"\n[red]Error:[/] {exc}")
@@ -150,7 +148,6 @@ def _repl(
 
 
 def _run_single(
-    client: LLMClient,
     user_message: str,
     skills: list[SkillDef],
     *,
@@ -175,8 +172,7 @@ def _run_single(
         append_system_prompt=append_system_prompt,
     )
 
-    agent_session = Session(
-        client=client,
+    session = Session(
         tools=tools,
         system_prompt=system,
         on_confirm=None,  # auto-deny in print mode
@@ -184,7 +180,7 @@ def _run_single(
 
     try:
         final_text = ""
-        for event in agent_session.chat(user_message, print_mode=True):
+        for event in session.chat(user_message, print_mode=True):
             if event.get("type") == "done":
                 final_text = event.get("content", "")
             # Print streaming content directly

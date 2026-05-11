@@ -7,7 +7,7 @@ import signal
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -17,7 +17,6 @@ from rich.text import Text
 
 from mva.agent import (
     ChatMessage,
-    LLMClient,
     ToolDef,
     SkillDef,
     build_skills_prompt,
@@ -25,6 +24,9 @@ from mva.agent import (
     execute_tool,
     get_tool_defs,
 )
+
+if TYPE_CHECKING:
+    from mva.agent import Session
 
 _console = Console()
 
@@ -412,7 +414,7 @@ def reload_environment(
 def handle_command(
     raw: str,
     history: list[dict[str, Any]],
-    client: LLMClient,
+    session: Session,
     *,
     skills: list[SkillDef] | None = None,
 ) -> bool | None:
@@ -432,19 +434,19 @@ def handle_command(
         return True
 
     if cmd == "model":
-        _print_model_info(client)
+        _print_model_info(session)
         return True
 
     if cmd.startswith("model "):
-        _switch_model(client, cmd[6:].strip())
+        _switch_model(session, cmd[6:].strip())
         return True
 
     if cmd in ("provider", "providers"):
-        _list_providers(client)
+        _list_providers(session)
         return True
 
     if cmd.startswith("provider "):
-        _switch_provider(client, cmd[9:].strip())
+        _switch_provider(session, cmd[9:].strip())
         return True
 
     if cmd == "reload":
@@ -546,11 +548,11 @@ def _toggle_skill(skills: list[SkillDef], name: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _print_model_info(client: LLMClient) -> None:
+def _print_model_info(session: Session) -> None:
     """Print current provider/model and list all models for this provider."""
-    prov = client.current_provider or "(unknown)"
-    model = client.default_model or "(no default model)"
-    url = client.base_url
+    prov = session.current_provider or "(unknown)"
+    model = session.client.default_model or "(no default model)"
+    url = session.client.base_url
 
     table = Table(title="Current Model", title_style="bold", box=None)
     table.add_column("Setting", style="cyan")
@@ -561,7 +563,7 @@ def _print_model_info(client: LLMClient) -> None:
     _console.print(table)
 
     # Always try to show available models for the current provider
-    available = client.available_models
+    available = session.available_models
     if available:
         models_table = Table(
             title=f"Models — {prov}", title_style="bold", box=None
@@ -585,7 +587,7 @@ def _print_model_info(client: LLMClient) -> None:
         )
 
 
-def _switch_model(client: LLMClient, target: str) -> None:
+def _switch_model(session: Session, target: str) -> None:
     """Switch to a different model.
 
     ``/model <name>`` — uses the model name directly (must be in the
@@ -600,7 +602,7 @@ def _switch_model(client: LLMClient, target: str) -> None:
         _console.print(
             "[yellow]Usage:[/] /model <model_name>  or  /model <provider>/<model>"
         )
-        _print_model_info(client)
+        _print_model_info(session)
         return
 
     # Provider/model syntax: /model <provider>/<model>
@@ -616,16 +618,16 @@ def _switch_model(client: LLMClient, target: str) -> None:
             )
             return
 
-        if client.switch_provider(provider_name):
+        if session.switch_provider(provider_name):
             _console.print(
                 f"[green]Switched to provider '{provider_name}'.[/]"
             )
-            if client.set_model(model_name):
+            if session.set_model(model_name):
                 _console.print(
                     f"[green]Model set to '{model_name}'.[/]"
                 )
             else:
-                available = client.available_models
+                available = session.available_models
                 if available:
                     _console.print(
                         f"[yellow]Model '{model_name}' not in"
@@ -637,23 +639,23 @@ def _switch_model(client: LLMClient, target: str) -> None:
                         f"[yellow]Model '{model_name}' not found in"
                         f" provider '{provider_name}'.[/]"
                     )
-            _print_model_info(client)
+            _print_model_info(session)
         else:
             _console.print(
                 f"[yellow]Unknown provider:[/] '{provider_name}'."
             )
-            _list_providers(client)
+            _list_providers(session)
         return
 
     # Simple model name: switch within current provider
-    if client.set_model(target):
+    if session.set_model(target):
         _console.print(
             f"[green]Model set to '{target}'"
-            f" (provider: {client.current_provider}).[/]"
+            f" (provider: {session.current_provider}).[/]"
         )
-        _print_model_info(client)
+        _print_model_info(session)
     else:
-        available = client.available_models
+        available = session.available_models
         if available:
             _console.print(
                 f"[yellow]Unknown model:[/] '{target}'."
@@ -662,12 +664,12 @@ def _switch_model(client: LLMClient, target: str) -> None:
         else:
             _console.print(
                 f"[yellow]Model '{target}' not found in current"
-                f" provider '{client.current_provider}'.[/]"
+                f" provider '{session.current_provider}'.[/]"
             )
-        _print_model_info(client)
+        _print_model_info(session)
 
 
-def _switch_provider(client: LLMClient, target: str) -> None:
+def _switch_provider(session: Session, target: str) -> None:
     """Switch to a different provider from config.
 
     ``/provider <name>`` — switch provider (and use its default_model).
@@ -681,7 +683,7 @@ def _switch_provider(client: LLMClient, target: str) -> None:
         _console.print(
             "[yellow]Usage:[/] /provider <provider>  or  /provider <provider>/<model>"
         )
-        _list_providers(client)
+        _list_providers(session)
         return
 
     if "/" in target:
@@ -692,12 +694,12 @@ def _switch_provider(client: LLMClient, target: str) -> None:
         provider_name = target
         model_name = None
 
-    if client.switch_provider(provider_name):
+    if session.switch_provider(provider_name):
         _console.print(
             f"[green]Switched to provider '{provider_name}'.[/]"
         )
         if model_name:
-            if client.set_model(model_name):
+            if session.set_model(model_name):
                 _console.print(
                     f"[green]Model set to '{model_name}'.[/]"
                 )
@@ -706,15 +708,15 @@ def _switch_provider(client: LLMClient, target: str) -> None:
                     f"[yellow]Model '{model_name}' not found in"
                     f" provider '{provider_name}'.[/]"
                 )
-        _print_model_info(client)
+        _print_model_info(session)
     else:
         _console.print(
             f"[yellow]Unknown provider:[/] '{provider_name}'."
         )
-        _list_providers(client)
+        _list_providers(session)
 
 
-def _list_providers(client: LLMClient) -> None:
+def _list_providers(session: Session) -> None:
     """List all available providers from the config file."""
     from mva.config import load_config  # noqa: PLC0415
 

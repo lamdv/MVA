@@ -11,9 +11,9 @@ import sys
 import typer
 from rich.console import Console
 
-from mva.cli.console import _create_prompt_session, set_client, set_skills
+from mva.cli.console import _create_prompt_session, set_session, set_skills
 from mva.cli.repl import _repl, _run_single
-from mva.agent import LLMClient, Session, discover_skills, get_tool_defs
+from mva.agent import Session, discover_skills, get_tool_defs
 from mva.utils import (
     build_system_prompt,
     install_signal_handler,
@@ -80,15 +80,13 @@ def app(
             user_message = f"{piped}\n\n{user_message}" if user_message else piped
     user_message = user_message.strip()
 
-    client = LLMClient()
-    set_client(client)
+    session: Session | None = None
     agent_md_path: str | None = None if no_context_files else "AGENT.md"
 
     try:
         if print_mode or message:
             # Non-interactive single-run mode
             _run_single(
-                client,
                 user_message,
                 skills,
                 system_prompt=system_prompt,
@@ -108,23 +106,22 @@ def app(
                 append_system_prompt=append_system_prompt,
             )
 
-            agent_session = Session(
-                client=client,
+            session = Session(
                 tools=tools,
                 system_prompt=system,
                 on_confirm=None,  # set by _repl when needed
             )
+            set_session(session)
 
             pt_session = _create_prompt_session()
             _repl(
                 pt_session,
-                client,
-                agent_session.history,
-                agent_session,
+                session,
                 skills,
                 system_prompt=system_prompt,
                 append_system_prompt=append_system_prompt,
                 agent_md_path=agent_md_path,
             )
     finally:
-        client.close()
+        if session is not None:
+            session.client.close()

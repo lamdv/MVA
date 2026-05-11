@@ -9,20 +9,23 @@ conversational agent is accessible from ``mva.agent``::
     )
 """
 
-from mva.agent.client import (
+from mva.agent.types import (
     ChatChoice,
     ChatMessage,
     ChatResponse,
     CompletionUsage,
-    LLMClient,
     LLMError,
     StreamingDelta,
-    ToolDef,
+    message_to_dict,
+    parse_chat_response,
+    tool_to_dict,
 )
+from mva.agent.client import LLMClient
 
 # -- Re-export select tools symbols ----------------------------------------
 # These must come before session import: session -> mva.utils -> mva.agent
 from mva.agent.tools import execute_tool, get_tool_defs, ToolResult
+from mva.agent.tools.base import ToolDef
 
 # -- Re-export select skills symbols ---------------------------------------
 # Same ordering constraint as above.
@@ -40,12 +43,16 @@ __all__ = [
     "Session",
     "StreamingDelta",
     "ToolDef",
+    "ToolResult",
     # tools
     "execute_tool",
     "get_tool_defs",
-    "ToolResult",
     # skills
     "SkillDef",
     "build_skills_prompt",
     "discover_skills",
+    # serialization
+    "message_to_dict",
+    "parse_chat_response",
+    "tool_to_dict",
 ]

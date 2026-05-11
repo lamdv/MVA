@@ -3,16 +3,17 @@
 A :class:`Session` is the reusable middle layer between a UI and the
 :class:`~mva.agent.LLMClient`.  It owns the conversation history, runs the
 tool-calling loop, and yields structured events for the UI to render.
+It also manages provider / model state on behalf of the UI.
 
 Usage (CLI)::
 
-    session = Session(client, tools, system_prompt, on_confirm=confirm_cb)
+    session = Session(tools, system_prompt, on_confirm=confirm_cb)
     for event in session.chat("hello"):
         render(event)
 
 Usage (web)::
 
-    session = Session(client, tools, system_prompt)
+    session = Session(tools, system_prompt)
     for event in session.chat("hello"):
         socket.emit("event", event)
 """
@@ -22,8 +23,9 @@ from __future__ import annotations
 import json
 from typing import Any, Generator
 
-from mva.agent import ChatMessage, LLMClient, LLMError, StreamingDelta, ToolDef
-from mva.agent.tools import ToolResult, execute_tool
+from mva.agent.client import LLMClient
+from mva.agent.types import ChatMessage, LLMError, StreamingDelta
+from mva.agent.tools import ToolDef, ToolResult, execute_tool
 from mva.utils import build_messages, is_cancel_requested
 from mva.utils import _mark_streaming_start, _mark_streaming_stop
 
@@ -70,14 +72,19 @@ ERROR = "error"
 class Session:
     """Manages a single conversation with tool-calling support.
 
+    The session owns the :class:`LLMClient` instance and manages
+    provider / model state.  Use :meth:`switch_provider` and
+    :meth:`set_model` to change the active backend at runtime.
+
     Parameters
     ----------
-    client : LLMClient
-        The API client used for chat completions.
     tools : list[ToolDef]
         Tool definitions sent to the API.
     system_prompt : str
         The system prompt (built once by the caller, can be updated later).
+    client : LLMClient or None
+        An optional pre-configured client.  When ``None``, a client is
+        auto-created from ``model.yaml`` via :meth:`LLMClient.from_config`.
     on_confirm : callable or None
         Called when a tool requires user confirmation.
         Signature: ``on_confirm(message: str, tool: str, args: dict) -> bool``
@@ -86,19 +93,95 @@ class Session:
 
     def __init__(
         self,
-        client: LLMClient,
         tools: list[ToolDef],
         system_prompt: str,
         *,
+        client: LLMClient | None = None,
         on_confirm: Any = None,
     ) -> None:
-        self.client = client
+        self.client = client or LLMClient.from_config()
         self.tools = tools[:]
         self._system_prompt = system_prompt
         self.on_confirm = on_confirm
 
+        # Provider / model state (used by CLI for /model, /provider commands)
+        self.current_provider: str | None = None
+        self._available_models: list[str] = []
+
+        # Load provider name and available models from config if possible
+        self._refresh_provider_state()
+
         # Owned state
         self.history: list[dict[str, Any]] = []
+
+    # ------------------------------------------------------------------
+    # Provider / model management
+    # ------------------------------------------------------------------
+
+    def _refresh_provider_state(self) -> None:
+        """Read the active provider name and model list from config."""
+        try:
+            from mva.config import load_config  # noqa: PLC0415
+            cfg = load_config()
+            self.current_provider = cfg.provider
+            provider_cfg = cfg.providers.get(cfg.provider)
+            if provider_cfg:
+                self._available_models = list(provider_cfg.models)
+        except Exception:
+            pass
+
+    def switch_provider(self, provider_name: str) -> bool:
+        """Switch to a different provider from the config file.
+
+        Re-loads ``model.yaml``, applies the named provider's
+        configuration to the internal client, and updates
+        *current_provider* and *available_models*.
+
+        Returns ``True`` on success, ``False`` if the provider is not found.
+        """
+        from mva.config import reload_config  # noqa: PLC0415
+
+        try:
+            cfg = reload_config()
+        except Exception:
+            return False
+
+        if provider_name not in cfg.providers:
+            return False
+
+        provider = cfg.providers[provider_name]
+        # Reconfigure the existing client in-place
+        self.client.base_url = provider.base_url.rstrip("/")
+        self.client.api_key = provider.api_key
+        self.client._session.headers.update(
+            {"Authorization": f"Bearer {self.client.api_key}"}
+        )
+        self.client.default_model = provider.default_model
+        self.client.timeout = provider.timeout
+
+        self.current_provider = provider_name
+        self._available_models = list(provider.models)
+        return True
+
+    def set_model(self, model_name: str) -> bool:
+        """Set the active model within the current provider.
+
+        If *available_models* is non-empty, *model_name* must appear in
+        that list.  When the list is empty, the model is set
+        unconditionally (backward-compatible behaviour).
+
+        Returns ``True`` on success.
+        """
+        if self._available_models and model_name not in self._available_models:
+            return False
+        self.client.default_model = model_name
+        return True
+
+    @property
+    def available_models(self) -> list[str]:
+        """Return the list of available model names for the current
+        provider (may be empty if none were declared in config)."""
+        return list(self._available_models)
 
     # ------------------------------------------------------------------
     # Public API

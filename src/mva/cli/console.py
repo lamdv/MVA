@@ -16,7 +16,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style as PTStyle
 
-from mva.agent import LLMClient, SkillDef
+from mva.agent import Session, SkillDef
 
 # ---------------------------------------------------------------------------
 # History path
@@ -29,14 +29,14 @@ _HISTORY_PATH = _HISTORY_DIR / "history"
 # Module-level state (injected by the app at startup)
 # ---------------------------------------------------------------------------
 
-_client_ref: LLMClient | None = None
+_session_ref: Session | None = None
 _skills_ref: list[SkillDef] | None = None
 
 
-def set_client(client: LLMClient) -> None:
-    """Store a reference to the active LLM client for the completer / toolbar."""
-    global _client_ref  # noqa: PLW0603
-    _client_ref = client
+def set_session(session: Session) -> None:
+    """Store a reference to the active session for the completer / toolbar."""
+    global _session_ref  # noqa: PLW0603
+    _session_ref = session
 
 
 def set_skills(skills: list[SkillDef]) -> None:
@@ -108,7 +108,7 @@ class MVACompleter(Completer):
             return
 
         # --- /model <name> or /model <provider>/<model> completions ---
-        if text.startswith("/model ") and _client_ref is not None:
+        if text.startswith("/model ") and _session_ref is not None:
             prefix = text[7:]
 
             # If prefix contains "/", we're in provider/model mode.
@@ -164,7 +164,7 @@ class MVACompleter(Completer):
                 pass
 
             # Also complete plain model names from current provider
-            for model in _client_ref.available_models:
+            for model in _session_ref.available_models:
                 if model.startswith(prefix):
                     yield Completion(
                         f"/model {model}",
@@ -239,8 +239,10 @@ def _build_key_bindings() -> KeyBindings:
 
 def _get_bottom_toolbar() -> str:
     """Return the current model/provider info for the bottom toolbar."""
-    prov = _client_ref.current_provider if _client_ref else "?"
-    model = _client_ref.default_model if _client_ref else ""
+    if _session_ref is None:
+        return "?"
+    prov = _session_ref.current_provider or "?"
+    model = _session_ref.client.default_model or ""
     ctx = f"⚡ {prov}"
     if model:
         ctx += f" / {model}"

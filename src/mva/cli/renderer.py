@@ -130,7 +130,7 @@ class EventRenderer:
                 if len(v_str) > 100:
                     v_str = v_str[:100] + "…"
                 lines.append(f"{k}: {v_str}")
-            args_str = "\n".join(lines) if lines else ""
+            args_str = "\n  ".join(lines) if lines else ""
         else:
             args_str = str(args)
             if len(args_str) > 100:
