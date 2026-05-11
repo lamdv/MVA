@@ -107,9 +107,63 @@ class MVACompleter(Completer):
                     )
             return
 
-        # --- /model <name> completions ---
+        # --- /model <name> or /model <provider>/<model> completions ---
         if text.startswith("/model ") and _client_ref is not None:
             prefix = text[7:]
+
+            # If prefix contains "/", we're in provider/model mode.
+            # Complete model names within the specified provider.
+            if "/" in prefix:
+                prov_part, model_part = prefix.split("/", 1)
+                prov_part = prov_part.strip()
+                model_part = model_part.lstrip()
+                try:
+                    from mva.config import load_config  # noqa: PLC0415
+
+                    cfg = load_config()
+                    if prov_part in cfg.providers:
+                        provider_cfg = cfg.providers[prov_part]
+                        for model in (provider_cfg.models or []):
+                            if model.startswith(model_part):
+                                yield Completion(
+                                    f"/model {prov_part}/{model}",
+                                    start_position=-len(text),
+                                    display=f"{prov_part}/{model}",
+                                    display_meta="switch provider + model",
+                                )
+                except Exception:
+                    pass
+                return
+
+            # No "/" yet — complete provider/model pairs first,
+            # then plain model names.
+            try:
+                from mva.config import load_config  # noqa: PLC0415
+
+                cfg = load_config()
+                for prov_name, prov_cfg in cfg.providers.items():
+                    if prov_name.startswith(prefix):
+                        # Complete as provider prefix (for provider/model syntax)
+                        yield Completion(
+                            f"/model {prov_name}/",
+                            start_position=-len(text),
+                            display=f"{prov_name}/",
+                            display_meta="switch provider + model",
+                        )
+                    # Complete full provider/model pairs
+                    for model in (prov_cfg.models or []):
+                        full = f"{prov_name}/{model}"
+                        if full.startswith(prefix):
+                            yield Completion(
+                                f"/model {full}",
+                                start_position=-len(text),
+                                display=full,
+                                display_meta="switch provider + model",
+                            )
+            except Exception:
+                pass
+
+            # Also complete plain model names from current provider
             for model in _client_ref.available_models:
                 if model.startswith(prefix):
                     yield Completion(

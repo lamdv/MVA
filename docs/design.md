@@ -977,7 +977,7 @@ No CLI imports. No rendering logic. Just the agent, portable.
 
 The trade-off is a thin abstraction layer — `Session.chat()` mostly delegates to `client.chat_stream()`. But that's fine. The abstraction exists at the right level: `LLMClient` is the "how" (HTTP streaming), and `Session` is the "what" (agent interaction loop).
 
-It also makes testing easier. You can mock `LLMClient` and test the session's tool-loop logic without hitting a real API:
+It also makes testing easier. You can mock `LLMClient` and test the session's tool-loop logic without hitting a real API — the session never knows the difference between a mock and the real client.
 
 ---
 

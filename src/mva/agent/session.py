@@ -187,7 +187,7 @@ class Session:
             final_tool_calls: list[dict[str, Any]] | None = None
             final_delta: StreamingDelta | None = None
             cancelled = False
-            _emitted_tc_count: int = 0  # track tool calls already yielded
+            _tool_calls_seen: bool = False  # avoid re-emitting the heads-up
 
             # Mark streaming active so Ctrl+C cancels instead of exiting
             _mark_streaming_start()
@@ -201,31 +201,35 @@ class Session:
                         cancelled = True
                         break
 
-                # Yield thinking / delta events
-                if delta.thinking_delta:
-                    yield {"type": THINKING, "content": delta.thinking_delta}
-                if delta.delta:
-                    yield {"type": DELTA, "content": delta.delta}
+                    # Yield thinking / delta events as they arrive
+                    if delta.thinking_delta:
+                        yield {"type": THINKING, "content": delta.thinking_delta}
+                    if delta.delta:
+                        yield {"type": DELTA, "content": delta.delta}
 
-                if delta.finish_reason == "cancelled":
-                    cancelled = True
-                    break
+                    if delta.finish_reason == "cancelled":
+                        cancelled = True
+                        break
 
-                # Yield tool-call events as soon as they appear in the stream,
-                # before the stream finishes.  New tool calls are detected by
-                # checking whether the accumulated list has grown.
-                if delta.tool_calls:
-                    final_tool_calls = delta.tool_calls
-                    while len(delta.tool_calls) > _emitted_tc_count:
-                        tc = delta.tool_calls[_emitted_tc_count]
-                        _emitted_tc_count += 1
-                        yield {
-                            "type": TOOL_CALL,
-                            "id": tc.get("id", ""),
-                            "name": tc["function"]["name"],
-                            "args": tc["function"]["arguments"],
-                        }
-                final_delta = delta
+                    # Stream tool calls as they form — yield the
+                    # current (possibly partial) name + args immediately
+                    # so the user sees what's happening without waiting
+                    # for the stream to finish.  The renderer truncates
+                    # args to 100 chars per value.
+                    if delta.tool_calls:
+                        final_tool_calls = delta.tool_calls
+                        if not _tool_calls_seen:
+                            _tool_calls_seen = True
+                            for tc in final_tool_calls:
+                                name = tc["function"]["name"] or "…"
+                                yield {
+                                    "type": TOOL_CALL,
+                                    "id": tc.get("id", ""),
+                                    "name": name,
+                                    "args": tc["function"]["arguments"],
+                                }
+
+                    final_delta = delta
             finally:
                 _mark_streaming_stop()
 
@@ -248,6 +252,18 @@ class Session:
                 and final_delta
                 and final_delta.finish_reason == "tool_calls"
             ):
+                # Emit TOOL_CALL events now with fully formed arguments
+                # (marked ``final`` so the renderer skips the tool name
+                # and only re-prints the now-complete args).
+                for tc in final_tool_calls:
+                    yield {
+                        "type": TOOL_CALL,
+                        "id": tc.get("id", ""),
+                        "name": tc["function"]["name"],
+                        "args": tc["function"]["arguments"],
+                        "final": True,
+                    }
+
                 # Record assistant entry with tool calls
                 self.history.append({
                     "role": "assistant",
@@ -257,7 +273,6 @@ class Session:
                 })
 
                 # Execute each tool call
-                # (TOOL_CALL events were already emitted during streaming)
                 for tc in final_tool_calls:
                     tc_id = tc.get("id", "")
                     fn_name = tc["function"]["name"]

@@ -121,7 +121,7 @@ def print_help() -> None:
     table.add_row("/help", "Show this help message")
     table.add_row("/history", "Show recent conversation history")
     table.add_row("/model", "Show current model and list available models")
-    table.add_row("/model <name>", "Switch model within the current provider")
+    table.add_row("/model <name>", "Switch model (accepts provider/model syntax)")
     table.add_row("/provider, /providers", "List available providers")
     table.add_row("/provider <name>", "Switch to a different provider")
     table.add_row("/tools", "List available tools")
@@ -586,18 +586,66 @@ def _print_model_info(client: LLMClient) -> None:
 
 
 def _switch_model(client: LLMClient, target: str) -> None:
-    """Switch to a different model within the current provider.
+    """Switch to a different model.
 
     ``/model <name>`` — uses the model name directly (must be in the
     current provider's ``available_models`` list, or any model if the
     list is not defined).
+
+    ``/model <provider>/<model>`` — switch provider and model in one
+    command (e.g. ``/model openai/gpt-4.1``).
     """
     target = target.strip()
     if not target:
-        _console.print("[yellow]Usage:[/] /model <model_name>")
+        _console.print(
+            "[yellow]Usage:[/] /model <model_name>  or  /model <provider>/<model>"
+        )
         _print_model_info(client)
         return
 
+    # Provider/model syntax: /model <provider>/<model>
+    if "/" in target:
+        provider_name, model_name = target.split("/", 1)
+        provider_name = provider_name.strip()
+        model_name = model_name.strip()
+
+        if not provider_name or not model_name:
+            _console.print(
+                "[yellow]Usage:[/] /model <provider>/<model>"
+                " — both parts are required.[/]"
+            )
+            return
+
+        if client.switch_provider(provider_name):
+            _console.print(
+                f"[green]Switched to provider '{provider_name}'.[/]"
+            )
+            if client.set_model(model_name):
+                _console.print(
+                    f"[green]Model set to '{model_name}'.[/]"
+                )
+            else:
+                available = client.available_models
+                if available:
+                    _console.print(
+                        f"[yellow]Model '{model_name}' not in"
+                        f" provider '{provider_name}'."
+                        f" Available: {', '.join(available)}[/]"
+                    )
+                else:
+                    _console.print(
+                        f"[yellow]Model '{model_name}' not found in"
+                        f" provider '{provider_name}'.[/]"
+                    )
+            _print_model_info(client)
+        else:
+            _console.print(
+                f"[yellow]Unknown provider:[/] '{provider_name}'."
+            )
+            _list_providers(client)
+        return
+
+    # Simple model name: switch within current provider
     if client.set_model(target):
         _console.print(
             f"[green]Model set to '{target}'"

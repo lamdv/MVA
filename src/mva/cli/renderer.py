@@ -1,23 +1,19 @@
 """Streaming event renderer for the MVA REPL.
 
 Renders :class:`Session` event dicts to a :class:`rich.console.Console`,
-handling thinking blocks (dim italic), regular content streamed as
-**rendered Markdown** via Rich's :class:`rich.live.Live` display, tool
-calls, and tool results.
+handling thinking blocks (dim italic), streamed content (plain text,
+character-by-character), tool calls, and tool results.
 
 State is tracked between events within a single turn to manage the
 transition between thinking, content, and tool-call phases.
 
-Markdown rendering
-------------------
-When the LLM emits content deltas, the renderer buffers the text and
-uses :class:`rich.live.Live` to display the full accumulated content
-as rendered Markdown.  This means **bold**, *italic*, ``code``,
-```code blocks```, lists, tables, headers, links, and images are all
-rendered live as the response streams in.
+.. note::
 
-On each delta, only the Live display area is refreshed — the
-"Assistant:" header and any previous thinking text remain static.
+    Content is streamed as **plain text** (not live Markdown) to avoid
+    terminal scrollback corruption.  ``rich.live.Live`` uses ANSI escape
+    sequences to rewrite its display area; when ``vertical_overflow``
+    is set to ``"visible"`` these codes pollute the scrollback buffer,
+    causing lines to appear duplicated when the user scrolls up.
 """
 
 from __future__ import annotations
@@ -26,8 +22,6 @@ import json
 from typing import Any
 
 from rich.console import Console
-from rich.live import Live
-from rich.markdown import Markdown
 
 _console = Console()
 
@@ -35,24 +29,23 @@ _console = Console()
 class EventRenderer:
     """Renders session events to the terminal, tracking per-turn state.
 
-    Uses Rich's :class:`~rich.live.Live` display to render streaming
-    Markdown content in-place.  Call :meth:`reset` between turns to
-    clear internal phase tracking and stop any active Live display.
+    Content deltas are streamed directly as plain text (no in-place
+    Markdown re-rendering) so the terminal scrollback buffer stays
+    clean.  Call :meth:`reset` between turns to clear internal phase
+    tracking.
     """
 
     def __init__(self) -> None:
         self.thinking_emitted = False
         self.content_started = False
         self._content_buffer: str = ""
-        self._live: Live | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
 
     def reset(self) -> None:
-        """Reset phase tracking for a new turn and stop any active Live."""
-        self._stop_live()
+        """Reset phase tracking for a new turn."""
         self.thinking_emitted = False
         self.content_started = False
         self._content_buffer = ""
@@ -77,33 +70,6 @@ class EventRenderer:
             self._render_error(event)
 
     # ------------------------------------------------------------------
-    # Live display management
-    # ------------------------------------------------------------------
-
-    def _start_live(self) -> None:
-        """Start a Rich Live display for streaming Markdown content."""
-        if self._live is not None:
-            return
-        self._live = Live(
-            Markdown(""),
-            refresh_per_second=12,
-            console=_console,
-            transient=True,        # keep scrollback clean (avoids frame pollution)
-            vertical_overflow="visible",
-        )
-        self._live.__enter__()
-
-    def _stop_live(self) -> None:
-        """Stop the active Live display, leaving final content visible."""
-        if self._live is None:
-            return
-        try:
-            self._live.__exit__(None, None, None)
-        except Exception:
-            pass
-        self._live = None
-
-    # ------------------------------------------------------------------
     # Event handlers
     # ------------------------------------------------------------------
 
@@ -119,38 +85,77 @@ class EventRenderer:
         )
 
     def _render_delta(self, event: dict[str, Any]) -> None:
-        """Buffer the content delta and update the Live Markdown display."""
-        # Print "Assistant:" header on first content delta
+        """Stream the content delta directly to the terminal.
+
+        Plain-text streaming avoids ANSI-escape pollution of the
+        scrollback buffer that occurs with ``rich.live.Live`` re-rendering.
+        """
         if not self.content_started:
             self.content_started = True
             if self.thinking_emitted:
                 _console.print()  # newline after thinking block
-            _console.print("\n[bold cyan]Assistant:[/] ", highlight=False)
+            _console.print("\n[bold cyan]Assistant:[/] ", end="", highlight=False)
 
-        # Buffer and render
         self._content_buffer += event["content"]
-        self._start_live()
-
-        # If the buffer is just whitespace, don't render yet
-        rendered = Markdown(self._content_buffer) if self._content_buffer.strip() else Markdown("")
-        self._live.update(rendered)  # type: ignore[union-attr]
+        _console.print(event["content"], end="", highlight=False)
 
     def _render_tool_call(self, event: dict[str, Any]) -> None:
-        """Finalize markdown, then render the tool call below it."""
-        self._stop_live()
+        """Render a tool call with its arguments.
 
+        Arguments are parsed from JSON (if received as a string),
+        displayed as key: value lines trimmed to 100 chars, wrapped
+        in ``---`` horizontal separators.
+
+        Tool calls are streamed as they arrive — the first event
+        carries the tool name with (possibly partial) args, and a
+        subsequent ``final`` event carries the complete args.  On
+        final events the tool name is suppressed to avoid repetition.
+        """
         name = event["name"]
         args = event.get("args", {})
-        args_str = json.dumps(args, indent=2)
+        final = event.get("final", False)
 
-        _console.print(
-            f"\n  [bold yellow]⚡ {name}[/] [dim]Calling with arguments:[/]",
-            highlight=False,
-        )
-        _console.print(
-            f"  [dim italic]{args_str}[/]",
-            highlight=False,
-        )
+        # The API sends arguments as a JSON string; parse it
+        if isinstance(args, str) and args.strip():
+            try:
+                args = json.loads(args)
+            except json.JSONDecodeError:
+                pass  # keep as-is (partial JSON while streaming)
+
+        # Format args as key: value lines, truncated to 100 chars
+        if isinstance(args, dict):
+            lines = []
+            for k, v in args.items():
+                v_str = str(v)
+                if len(v_str) > 100:
+                    v_str = v_str[:100] + "…"
+                lines.append(f"{k}: {v_str}")
+            args_str = "\n".join(lines) if lines else ""
+        else:
+            args_str = str(args)
+            if len(args_str) > 100:
+                args_str = args_str[:100] + "…"
+
+        # First emission: show tool name + args between --- separators.
+        # Final emission: only show args (name already printed above).
+        if not final:
+            _console.print(
+                f"\n  [bold yellow]⚡ {name}[/]",
+                highlight=False,
+            )
+        if args_str:
+            _console.print(
+                "  [dim]---[/]",
+                highlight=False,
+            )
+            _console.print(
+                f"  [dim italic]{args_str}[/]",
+                highlight=False,
+            )
+            _console.print(
+                "  [dim]---[/]",
+                highlight=False,
+            )
 
         # Reset phase tracking for the next round
         self.thinking_emitted = False
@@ -170,13 +175,11 @@ class EventRenderer:
             )
 
     def _render_done(self) -> None:
-        """Finalize the response — stop the Live display so the terminal
-        is in a clean state for the next prompt."""
-        self._stop_live()
+        """Response complete — nothing extra to render (text already streamed)."""
+        pass
 
     def _render_cancelled(self) -> None:
         """Render a cancellation notice."""
-        self._stop_live()
         if not self.content_started and not self.thinking_emitted:
             _console.print("\n[dim](empty response)[/]")
         elif self.content_started:
@@ -185,7 +188,6 @@ class EventRenderer:
 
     def _render_error(self, event: dict[str, Any]) -> None:
         """Render an error message."""
-        self._stop_live()
         _console.print(f"\n[red]Error:[/] {event['content']}")
 
 
