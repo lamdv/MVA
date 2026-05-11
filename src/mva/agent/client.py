@@ -24,7 +24,9 @@ from typing import Any, Generator
 import requests
 
 from mva.agent.types import (
+    ChatChoice,
     ChatMessage,
+    ChatResponse,
     CompletionUsage,
     LLMError,
     StreamingDelta,
@@ -182,6 +184,89 @@ class LLMClient:
             api_key=provider_cfg.api_key,
             default_model=provider_cfg.default_model,
             timeout=provider_cfg.timeout,
+        )
+
+    # -- Non-streaming chat (blocking wrapper around chat_stream) -----------
+
+    def chat(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str | None = None,
+        max_tokens: int = -1,
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+        stop: str | list[str] | None = None,
+        presence_penalty: float = 0.0,
+        frequency_penalty: float = 0.0,
+        seed: int | None = None,
+        user: str | None = None,
+        tools: list[ToolDef] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        **extra_params: Any,
+    ) -> ChatResponse:
+        """Send a chat completion and return the complete response.
+
+        This is a blocking convenience wrapper around :meth:`chat_stream`.
+        It collects all streaming deltas and assembles a :class:`ChatResponse`.
+
+        Parameters are identical to :meth:`chat_stream`.
+        """
+        final_id = ""
+        final_model = ""
+        content = ""
+        reasoning: str | None = None
+        tool_calls: list[dict[str, Any]] | None = None
+        usage: CompletionUsage | None = None
+        finish_reason: str | None = None
+
+        for delta in self.chat_stream(
+            messages,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop=stop,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            seed=seed,
+            user=user,
+            tools=tools,
+            tool_choice=tool_choice,
+            **extra_params,
+        ):
+            if delta.id:
+                final_id = delta.id
+            if delta.model:
+                final_model = delta.model
+            content = delta.accumulated or content
+            if delta.reasoning_content:
+                reasoning = delta.reasoning_content
+            if delta.tool_calls:
+                tool_calls = delta.tool_calls
+            if delta.usage:
+                usage = delta.usage
+            if delta.finish_reason:
+                finish_reason = delta.finish_reason
+
+        if finish_reason == "cancelled":
+            content = "" if content is None else content
+
+        return ChatResponse(
+            id=final_id,
+            model=final_model,
+            choices=[
+                ChatChoice(
+                    message=ChatMessage(
+                        role="assistant",
+                        content=content or "",
+                        tool_calls=tool_calls,
+                        reasoning_content=reasoning,
+                    ),
+                    finish_reason=finish_reason,
+                )
+            ],
+            usage=usage,
         )
 
     # -- Streaming chat -----------------------------------------------------
