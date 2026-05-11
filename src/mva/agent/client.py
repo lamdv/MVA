@@ -37,6 +37,80 @@ from mva.agent.tools import ToolDef
 
 
 # ---------------------------------------------------------------------------
+# Helper: ToolCallAccumulator
+# ---------------------------------------------------------------------------
+
+
+class ToolCallAccumulator:
+    """Accumulates tool call deltas from streaming SSE chunks.
+
+    OpenAI sends tool calls as a sequence of delta chunks.  Each chunk
+    may contain a partial ``id``, partial ``name``, and/or a fragment
+    of JSON ``arguments``.  This class merges them into complete tool
+    call dicts.
+
+    Usage::
+
+        acc = ToolCallAccumulator()
+        for chunk in stream:
+            acc.feed(chunk.get("delta", {}).get("tool_calls", []))
+            complete = acc.collect()  # list of fully accumulated calls
+    """
+
+    def __init__(self) -> None:
+        self._calls: dict[int, dict[str, Any]] = {}
+
+    def feed(self, deltas: list[dict[str, Any]]) -> None:
+        """Feed raw tool call deltas from a single streaming chunk.
+
+        Parameters
+        ----------
+        deltas:
+            The ``tool_calls`` list from a choice delta object.  Each
+            entry has at least an ``index`` key and optionally ``id``
+            and ``function`` fields.
+        """
+        for tc in deltas:
+            idx = tc.get("index", 0)
+            if idx not in self._calls:
+                self._calls[idx] = {
+                    "id": tc.get("id", ""),
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                }
+            entry = self._calls[idx]
+            if tc.get("id"):
+                entry["id"] = tc["id"]
+            fn = tc.get("function", {})
+            if fn.get("name"):
+                entry["function"]["name"] = fn["name"]
+            if fn.get("arguments"):
+                entry["function"]["arguments"] += fn["arguments"]
+
+    def collect(self) -> list[dict[str, Any]]:
+        """Return all accumulated tool calls, ordered by index.
+
+        Returns an empty list when no tool calls have been fed.
+        """
+        result: list[dict[str, Any]] = []
+        for idx in sorted(self._calls.keys()):
+            entry = self._calls[idx]
+            result.append({
+                "id": entry["id"],
+                "type": "function",
+                "function": {
+                    "name": entry["function"]["name"],
+                    "arguments": entry["function"]["arguments"],
+                },
+            })
+        return result
+
+    def __bool__(self) -> bool:
+        """``True`` if any tool calls have been accumulated."""
+        return bool(self._calls)
+
+
+# ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
 
@@ -173,42 +247,31 @@ class LLMClient:
                 "A model must be specified via argument or default_model."
             )
 
-        url = f"{self.base_url}/chat/completions"
-
-        body: dict[str, Any] = {
-            "model": model,
-            "messages": [message_to_dict(m) for m in messages],
-            "temperature": temperature,
-            "top_p": top_p,
-            "presence_penalty": presence_penalty,
-            "frequency_penalty": frequency_penalty,
-        }
-
-        if max_tokens > 0:
-            body["max_tokens"] = max_tokens
-        if stop is not None:
-            body["stop"] = stop
-        if logprobs is not None:
-            body["logprobs"] = logprobs
-        if seed is not None:
-            body["seed"] = seed
-        if user is not None:
-            body["user"] = user
-        if tools:
-            body["tools"] = [tool_to_dict(t.name, t.description, t.parameters) for t in tools]
-            body["tool_choice"] = tool_choice or "auto"
-
+        body = self._build_request_body(
+            messages,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop=stop,
+            logprobs=logprobs,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            seed=seed,
+            user=user,
+            tools=tools,
+            tool_choice=tool_choice,
+            stream=False,
+        )
         body.update(extra_params)
 
         try:
-            resp = self._session.post(url, json=body, timeout=self.timeout)
-            if not resp.ok:
-                detail = resp.text[:500] if resp.text else "(no body)"
-                request_dump = json.dumps(body, indent=2, default=str)[:2000]
-                raise LLMError(
-                    f"Chat completion failed (HTTP {resp.status_code}): {detail}\n"
-                    f"Request body:\n{request_dump}"
-                )
+            resp = self._session.post(
+                f"{self.base_url}/chat/completions",
+                json=body,
+                timeout=self.timeout,
+            )
+            self._raise_on_bad_status(resp, body)
             raw = resp.json()
         except requests.RequestException as exc:
             raise LLMError(f"Chat completion request failed: {exc}") from exc
@@ -263,70 +326,42 @@ class LLMClient:
         # Lazy import to avoid circular dependency with mva.utils
         from mva.utils import is_cancel_requested  # noqa: PLC0415
 
-        url = f"{self.base_url}/chat/completions"
-
-        body: dict[str, Any] = {
-            "model": model,
-            "messages": [message_to_dict(m) for m in messages],
-            "temperature": temperature,
-            "top_p": top_p,
-            "presence_penalty": presence_penalty,
-            "frequency_penalty": frequency_penalty,
-            "stream": True,
-        }
-
-        if max_tokens > 0:
-            body["max_tokens"] = max_tokens
-        if stop is not None:
-            body["stop"] = stop
-        if seed is not None:
-            body["seed"] = seed
-        if user is not None:
-            body["user"] = user
-        if tools:
-            body["tools"] = [tool_to_dict(t.name, t.description, t.parameters) for t in tools]
-            body["tool_choice"] = tool_choice or "auto"
-
+        body = self._build_request_body(
+            messages,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop=stop,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+            seed=seed,
+            user=user,
+            tools=tools,
+            tool_choice=tool_choice,
+            stream=True,
+        )
         body.update(extra_params)
 
+        tc_accum = ToolCallAccumulator()
         acc_content = ""
         acc_thinking = ""
-        tool_calls_by_idx: dict[int, dict[str, Any]] = {}
         resp = None
         cancelled = False
 
         try:
             resp = self._session.post(
-                url, json=body, stream=True, timeout=self.timeout
+                f"{self.base_url}/chat/completions",
+                json=body,
+                stream=True,
+                timeout=self.timeout,
             )
-            if not resp.ok:
-                detail = resp.text[:500] if resp.text else "(no body)"
-                request_dump = json.dumps(body, indent=2, default=str)[:2000]
-                raise LLMError(
-                    f"Streaming request failed (HTTP {resp.status_code}):"
-                    f" {detail}\nRequest body:\n{request_dump}"
-                )
+            self._raise_on_bad_status(resp, body)
 
-            for raw_line in resp.iter_lines():
+            for chunk in self._iter_sse_chunks(resp):
                 if is_cancel_requested():
                     cancelled = True
                     break
-
-                if not raw_line:
-                    continue
-                line = raw_line.decode("utf-8").strip()
-
-                if not line.startswith("data: "):
-                    continue
-
-                payload = line[6:].strip()
-                if payload == "[DONE]":
-                    break
-
-                try:
-                    chunk = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
 
                 choices = chunk.get("choices", [])
                 if not choices:
@@ -334,47 +369,15 @@ class LLMClient:
 
                 choice = choices[0]
                 delta_obj = choice.get("delta", {})
-                delta = delta_obj.get("content", "")
                 finish = choice.get("finish_reason")
 
-                # --- Tool calls in delta ---
-                tc_deltas_raw = delta_obj.get("tool_calls")
-                if tc_deltas_raw:
-                    for tc in tc_deltas_raw:
-                        idx = tc.get("index", 0)
-                        if idx not in tool_calls_by_idx:
-                            tool_calls_by_idx[idx] = {
-                                "id": tc.get("id", ""),
-                                "type": "function",
-                                "function": {
-                                    "name": tc.get("function", {}).get("name", ""),
-                                    "arguments": "",
-                                },
-                            }
-                        entry = tool_calls_by_idx[idx]
-                        if tc.get("id"):
-                            entry["id"] = tc["id"]
-                        fn = tc.get("function", {})
-                        if fn.get("name"):
-                            entry["function"]["name"] = fn["name"]
-                        if fn.get("arguments"):
-                            entry["function"]["arguments"] += fn["arguments"]
+                # --- Tool calls ---
+                tc_accum.feed(delta_obj.get("tool_calls") or [])
 
-                # Collect completed tool calls
-                tool_calls: list[dict[str, Any]] = []
-                for idx in sorted(tool_calls_by_idx.keys()):
-                    entry = tool_calls_by_idx[idx]
-                    args_str = entry["function"]["arguments"]
-                    tool_calls.append(
-                        {
-                            "id": entry["id"],
-                            "type": "function",
-                            "function": {
-                                "name": entry["function"]["name"],
-                                "arguments": args_str,
-                            },
-                        }
-                    )
+                # --- Content ---
+                delta = delta_obj.get("content", "")
+                if delta:
+                    acc_content += delta
 
                 # --- Reasoning / thinking ---
                 reasoning = (
@@ -385,18 +388,6 @@ class LLMClient:
                 if reasoning:
                     acc_thinking += reasoning
 
-                if delta:
-                    acc_content += delta
-
-                usage: CompletionUsage | None = None
-                usage_raw = chunk.get("usage")
-                if usage_raw:
-                    usage = CompletionUsage(
-                        prompt_tokens=usage_raw.get("prompt_tokens", 0),
-                        completion_tokens=usage_raw.get("completion_tokens", 0),
-                        total_tokens=usage_raw.get("total_tokens", 0),
-                    )
-
                 yield StreamingDelta(
                     id=chunk.get("id", ""),
                     model=chunk.get("model", ""),
@@ -405,9 +396,9 @@ class LLMClient:
                     thinking_delta=reasoning,
                     thinking=acc_thinking,
                     finish_reason=finish,
-                    usage=usage,
-                    tool_calls=tool_calls if tool_calls else None,
-                    reasoning_content=acc_thinking if acc_thinking else None,
+                    usage=self._parse_usage(chunk.get("usage")),
+                    tool_calls=tc_accum.collect() or None,
+                    reasoning_content=acc_thinking or None,
                 )
 
         except requests.RequestException as exc:
@@ -417,15 +408,14 @@ class LLMClient:
                 try:
                     resp.close()
                 except Exception:
-                    pass  # connection may already be torn down on cancel
+                    pass
 
-        # Emit a cancellation marker so the caller can react gracefully
         if cancelled:
             yield StreamingDelta(
                 finish_reason="cancelled",
                 accumulated=acc_content,
                 thinking=acc_thinking,
-                reasoning_content=acc_thinking if acc_thinking else None,
+                reasoning_content=acc_thinking or None,
                 delta="",
                 tool_calls=None,
             )
@@ -435,3 +425,109 @@ class LLMClient:
     def close(self) -> None:
         """Close the underlying HTTP session."""
         self._session.close()
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _build_request_body(
+        self,
+        messages: list[ChatMessage],
+        *,
+        model: str,
+        max_tokens: int = -1,
+        temperature: float = 0.7,
+        top_p: float = 1.0,
+        stop: str | list[str] | None = None,
+        logprobs: int | None = None,
+        presence_penalty: float = 0.0,
+        frequency_penalty: float = 0.0,
+        seed: int | None = None,
+        user: str | None = None,
+        tools: list[ToolDef] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+        stream: bool = False,
+    ) -> dict[str, Any]:
+        """Build the JSON body for a chat completions request.
+
+        Shared by :meth:`chat` (stream=False) and
+        :meth:`chat_stream` (stream=True).
+        """
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": [message_to_dict(m) for m in messages],
+            "temperature": temperature,
+            "top_p": top_p,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+        }
+
+        if stream:
+            body["stream"] = True
+        if max_tokens > 0:
+            body["max_tokens"] = max_tokens
+        if stop is not None:
+            body["stop"] = stop
+        if logprobs is not None:
+            body["logprobs"] = logprobs
+        if seed is not None:
+            body["seed"] = seed
+        if user is not None:
+            body["user"] = user
+        if tools:
+            body["tools"] = [
+                tool_to_dict(t.name, t.description, t.parameters) for t in tools
+            ]
+            body["tool_choice"] = tool_choice or "auto"
+
+        return body
+
+    @staticmethod
+    def _iter_sse_chunks(
+        resp: requests.Response,
+    ) -> Generator[dict[str, Any]]:
+        """Parse an SSE response body and yield JSON chunks.
+
+        Each line should be ``data: <json>``.  Emits the parsed JSON
+        dict for each valid data line.  Stops on ``data: [DONE]``.
+        Skips empty lines and non-data lines silently.
+        """
+        for raw_line in resp.iter_lines():
+            if not raw_line:
+                continue
+            line = raw_line.decode("utf-8").strip()
+
+            if not line.startswith("data: "):
+                continue
+
+            payload = line[6:].strip()
+            if payload == "[DONE]":
+                break
+
+            try:
+                yield json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+
+    @staticmethod
+    def _raise_on_bad_status(resp: requests.Response, body: dict[str, Any]) -> None:
+        """Raise :class:`LLMError` if the response status is not OK."""
+        if resp.ok:
+            return
+        detail = resp.text[:500] if resp.text else "(no body)"
+        request_dump = json.dumps(body, indent=2, default=str)[:2000]
+        raise LLMError(
+            f"Chat completion failed (HTTP {resp.status_code}): {detail}\n"
+            f"Request body:\n{request_dump}"
+        )
+
+    @staticmethod
+    def _parse_usage(raw: dict[str, Any] | None) -> CompletionUsage | None:
+        """Parse a usage dict into a :class:`CompletionUsage`, or return None."""
+        if not raw:
+            return None
+        return CompletionUsage(
+            prompt_tokens=raw.get("prompt_tokens", 0),
+            completion_tokens=raw.get("completion_tokens", 0),
+            total_tokens=raw.get("total_tokens", 0),
+        )
