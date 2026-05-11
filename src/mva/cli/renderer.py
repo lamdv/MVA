@@ -88,7 +88,7 @@ class EventRenderer:
             Markdown(""),
             refresh_per_second=12,
             console=_console,
-            transient=False,       # leave final content visible on exit
+            transient=True,        # keep scrollback clean (avoids frame pollution)
             vertical_overflow="visible",
         )
         self._live.__enter__()
