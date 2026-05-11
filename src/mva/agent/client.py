@@ -35,7 +35,6 @@ from mva.agent.types import (
 )
 from mva.agent.tools import ToolDef
 
-
 # ---------------------------------------------------------------------------
 # Helper: ToolCallAccumulator
 # ---------------------------------------------------------------------------
@@ -95,14 +94,16 @@ class ToolCallAccumulator:
         result: list[dict[str, Any]] = []
         for idx in sorted(self._calls.keys()):
             entry = self._calls[idx]
-            result.append({
-                "id": entry["id"],
-                "type": "function",
-                "function": {
-                    "name": entry["function"]["name"],
-                    "arguments": entry["function"]["arguments"],
-                },
-            })
+            result.append(
+                {
+                    "id": entry["id"],
+                    "type": "function",
+                    "function": {
+                        "name": entry["function"]["name"],
+                        "arguments": entry["function"]["arguments"],
+                    },
+                }
+            )
         return result
 
     def __bool__(self) -> bool:
@@ -230,26 +231,27 @@ class LLMClient:
         ):
             pass
 
-        if last is None:
-            return ChatResponse(choices=[
-                ChatChoice(message=ChatMessage(role="assistant", content=""))
-            ])
-
-        return ChatResponse(
-            id=last.id,
-            model=last.model,
-            choices=[
-                ChatChoice(
-                    message=ChatMessage(
-                        role="assistant",
-                        content=last.accumulated or "",
-                        tool_calls=last.tool_calls,
-                        reasoning_content=last.reasoning_content,
-                    ),
-                    finish_reason=last.finish_reason,
-                )
-            ],
-            usage=last.usage,
+        return (
+            ChatResponse(
+                choices=[ChatChoice(message=ChatMessage(role="assistant", content=""))]
+            )
+            if last is None
+            else ChatResponse(
+                id=last.id,
+                model=last.model,
+                choices=[
+                    ChatChoice(
+                        message=ChatMessage(
+                            role="assistant",
+                            content=last.accumulated or "",
+                            tool_calls=last.tool_calls,
+                            reasoning_content=last.reasoning_content,
+                        ),
+                        finish_reason=last.finish_reason,
+                    )
+                ],
+                usage=last.usage,
+            )
         )
 
     # -- Streaming chat -----------------------------------------------------
@@ -279,9 +281,7 @@ class LLMClient:
         """
         model = model or self.default_model
         if not model:
-            raise ValueError(
-                "A model must be specified via argument or default_model."
-            )
+            raise ValueError("A model must be specified via argument or default_model.")
 
         # Lazy import to avoid circular dependency with mva.utils
         from mva.utils import is_cancel_requested  # noqa: PLC0415
