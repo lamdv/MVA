@@ -1,4 +1,4 @@
-"""OpenAI-compatible LLM chat completion client — pure HTTP transport.
+"""OpenAI-compatible LLM chat completion client — pure HTTP transport (streaming).
 
 This module contains a minimal HTTP client for OpenAI-compatible chat
 completion APIs.  It has **no knowledge of config files, provider
@@ -25,12 +25,10 @@ import requests
 
 from mva.agent.types import (
     ChatMessage,
-    ChatResponse,
     CompletionUsage,
     LLMError,
     StreamingDelta,
     message_to_dict,
-    parse_chat_response,
     tool_to_dict,
 )
 from mva.agent.tools import ToolDef
@@ -116,11 +114,15 @@ class ToolCallAccumulator:
 
 
 class LLMClient:
-    """A thin HTTP client for OpenAI-compatible chat completion APIs.
+    """A thin HTTP streaming client for OpenAI-compatible chat completion APIs.
 
     This class is a **pure transport layer**: it builds HTTP requests,
-    sends them, and parses responses.  It does **not** load configuration
-    files, manage provider state, or track available models.
+    sends them, and parses streaming responses.  It does **not** load
+    configuration files, manage provider state, or track available models.
+
+    Only streaming is supported (``chat_stream``).  Non-streaming usage
+    is not provided — callers that need a raw response should use
+    ``chat_stream`` and collect the final delta.
 
     Parameters
     ----------
@@ -182,114 +184,6 @@ class LLMClient:
             timeout=provider_cfg.timeout,
         )
 
-    # -- Non-streaming chat -------------------------------------------------
-
-    def chat(
-        self,
-        messages: list[ChatMessage],
-        *,
-        model: str | None = None,
-        max_tokens: int = -1,
-        temperature: float = 0.7,
-        top_p: float = 1.0,
-        stop: str | list[str] | None = None,
-        logprobs: int | None = None,
-        presence_penalty: float = 0.0,
-        frequency_penalty: float = 0.0,
-        seed: int | None = None,
-        user: str | None = None,
-        tools: list[ToolDef] | None = None,
-        tool_choice: str | dict[str, Any] | None = None,
-        **extra_params: Any,
-    ) -> ChatResponse:
-        """Send a chat completion request (non-streaming).
-
-        Parameters
-        ----------
-        messages:
-            A list of :class:`ChatMessage` objects representing the
-            conversation so far.
-        model:
-            Model identifier. Falls back to *default_model*.
-        max_tokens:
-            Maximum number of tokens to generate.  Use -1 or omit
-            to let the server decide.
-        temperature:
-            Sampling temperature (0–2).
-        top_p:
-            Nucleus sampling probability mass.
-        stop:
-            Stop sequence(s).
-        logprobs:
-            Return log probabilities of top N tokens (per token position).
-        presence_penalty, frequency_penalty:
-            Penalty values (-2–2).
-        seed:
-            Deterministic seed (if supported by the backend).
-        user:
-            End-user identifier for tracking.
-        tools:
-            Optional list of :class:`ToolDef` objects the model may call.
-        tool_choice:
-            Controls how the model uses tools.
-            ``"auto"`` (default), ``"none"``, ``"required"``, or
-            ``{"type": "function", "function": {"name": "..."}}``.
-        **extra_params:
-            Any additional parameters forwarded verbatim to the API body.
-
-        Returns
-        -------
-        A :class:`ChatResponse` with parsed choices and usage info.
-        """
-        model = model or self.default_model
-        if not model:
-            raise ValueError(
-                "A model must be specified via argument or default_model."
-            )
-
-        body = self._build_request_body(
-            messages,
-            model=model,
-            max_tokens=max_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            stop=stop,
-            logprobs=logprobs,
-            presence_penalty=presence_penalty,
-            frequency_penalty=frequency_penalty,
-            seed=seed,
-            user=user,
-            tools=tools,
-            tool_choice=tool_choice,
-            stream=False,
-        )
-        body.update(extra_params)
-
-        try:
-            resp = self._session.post(
-                f"{self.base_url}/chat/completions",
-                json=body,
-                timeout=self.timeout,
-            )
-            self._raise_on_bad_status(resp, body)
-            raw = resp.json()
-        except requests.RequestException as exc:
-            raise LLMError(f"Chat completion request failed: {exc}") from exc
-
-        return parse_chat_response(raw)
-
-    # -- Convenience helper -------------------------------------------------
-
-    def chat_simple(self, messages: list[ChatMessage], **kwargs: Any) -> str:
-        """Send a chat completion and return just the generated text.
-
-        Shortcut for single-choice, text-only responses.
-        """
-        response = self.chat(messages, **kwargs)
-        if response.choices:
-            return response.choices[0].message.content
-        return ""
-
     # -- Streaming chat -----------------------------------------------------
 
     def chat_stream(
@@ -314,8 +208,6 @@ class LLMClient:
         Yields a :class:`StreamingDelta` for each SSE chunk as it
         arrives.  Tool calls are accumulated across chunks and the
         final delta carries the complete list.
-
-        Parameters are identical to :meth:`chat`.
         """
         model = model or self.default_model
         if not model:
@@ -439,7 +331,6 @@ class LLMClient:
         temperature: float = 0.7,
         top_p: float = 1.0,
         stop: str | list[str] | None = None,
-        logprobs: int | None = None,
         presence_penalty: float = 0.0,
         frequency_penalty: float = 0.0,
         seed: int | None = None,
@@ -448,11 +339,7 @@ class LLMClient:
         tool_choice: str | dict[str, Any] | None = None,
         stream: bool = False,
     ) -> dict[str, Any]:
-        """Build the JSON body for a chat completions request.
-
-        Shared by :meth:`chat` (stream=False) and
-        :meth:`chat_stream` (stream=True).
-        """
+        """Build the JSON body for a chat completions request."""
         body: dict[str, Any] = {
             "model": model,
             "messages": [message_to_dict(m) for m in messages],
@@ -468,8 +355,6 @@ class LLMClient:
             body["max_tokens"] = max_tokens
         if stop is not None:
             body["stop"] = stop
-        if logprobs is not None:
-            body["logprobs"] = logprobs
         if seed is not None:
             body["seed"] = seed
         if user is not None:
