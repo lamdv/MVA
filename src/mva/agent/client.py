@@ -212,15 +212,8 @@ class LLMClient:
 
         Parameters are identical to :meth:`chat_stream`.
         """
-        final_id = ""
-        final_model = ""
-        content = ""
-        reasoning: str | None = None
-        tool_calls: list[dict[str, Any]] | None = None
-        usage: CompletionUsage | None = None
-        finish_reason: str | None = None
-
-        for delta in self.chat_stream(
+        last: StreamingDelta | None = None
+        for last in self.chat_stream(
             messages,
             model=model,
             max_tokens=max_tokens,
@@ -235,38 +228,28 @@ class LLMClient:
             tool_choice=tool_choice,
             **extra_params,
         ):
-            if delta.id:
-                final_id = delta.id
-            if delta.model:
-                final_model = delta.model
-            content = delta.accumulated or content
-            if delta.reasoning_content:
-                reasoning = delta.reasoning_content
-            if delta.tool_calls:
-                tool_calls = delta.tool_calls
-            if delta.usage:
-                usage = delta.usage
-            if delta.finish_reason:
-                finish_reason = delta.finish_reason
+            pass
 
-        if finish_reason == "cancelled":
-            content = "" if content is None else content
+        if last is None:
+            return ChatResponse(choices=[
+                ChatChoice(message=ChatMessage(role="assistant", content=""))
+            ])
 
         return ChatResponse(
-            id=final_id,
-            model=final_model,
+            id=last.id,
+            model=last.model,
             choices=[
                 ChatChoice(
                     message=ChatMessage(
                         role="assistant",
-                        content=content or "",
-                        tool_calls=tool_calls,
-                        reasoning_content=reasoning,
+                        content=last.accumulated or "",
+                        tool_calls=last.tool_calls,
+                        reasoning_content=last.reasoning_content,
                     ),
-                    finish_reason=finish_reason,
+                    finish_reason=last.finish_reason,
                 )
             ],
-            usage=usage,
+            usage=last.usage,
         )
 
     # -- Streaming chat -----------------------------------------------------
