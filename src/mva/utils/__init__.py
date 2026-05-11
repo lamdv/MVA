@@ -15,9 +15,16 @@ from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
 
-from mva.agent import ChatMessage, LLMClient, ToolDef
-from mva.skills import SkillDef, build_skills_prompt, discover_skills
-from mva.tools import execute_tool, get_tool_defs
+from mva.agent import (
+    ChatMessage,
+    LLMClient,
+    ToolDef,
+    SkillDef,
+    build_skills_prompt,
+    discover_skills,
+    execute_tool,
+    get_tool_defs,
+)
 
 _console = Console()
 
@@ -75,9 +82,10 @@ def _signal_handler(signum: int, _frame: Any) -> None:
         # The streaming loop will stop gracefully and return to the REPL.
         _cancel_requested = True
     else:
-        # Idle / waiting for input: exit as before.
-        goodbye(interrupted=True)
-        sys.exit(0)
+        # At the prompt: just return.  prompt_toolkit's raw-mode key
+        # binding handles Ctrl+C by clearing the input line, and the
+        # user can always use /exit or Ctrl+D to quit.
+        pass
 
 
 # ---------------------------------------------------------------------------
@@ -119,6 +127,7 @@ def print_help() -> None:
     table.add_row("/tools", "List available tools")
     table.add_row("/skills", "List available skills")
     table.add_row("/skill:<name>", "Enable/disable a skill")
+    table.add_row("/reload", "Hot-reload tools and skills (re-scan directories)")
     _console.print(table)
 
 
@@ -321,6 +330,81 @@ def build_messages(
 
 
 # ---------------------------------------------------------------------------
+# Sentinel for commands that need special handling
+# ---------------------------------------------------------------------------
+
+_RELOAD_SENTINEL = object()
+"""Returned by ``handle_command`` when the ``/reload`` command is issued.
+
+The REPL loop checks for this sentinel and calls
+:func:`reload_environment` with the session and skills list.
+"""
+
+
+# ---------------------------------------------------------------------------
+# Hot reload
+# ---------------------------------------------------------------------------
+
+
+def reload_environment(
+    agent_session: Any,
+    skills: list[Any],
+) -> list[Any]:
+    """Hot-reload tools and skills in-place.
+
+    Called by the REPL loop when the user types ``/reload``.
+
+    1. Clears the tool registry and re-discovers everything (built-ins,
+       entry points, project tools, global tools).
+    2. Updates ``agent_session.tools`` with fresh tool definitions.
+    3. Re-discovers skills and replaces the *skills* list in-place
+       (preserving enable/disable state by name).
+
+    Parameters
+    ----------
+    agent_session:
+        The active :class:`~mva.agent.Session` instance.  Its
+        ``.tools`` attribute is updated.
+    skills:
+        The current skills list (mutated in-place).  Skills that
+        survive the reload keep their enabled/disabled state.
+
+    Returns
+    -------
+    The *skills* list (same object, mutated in-place) for convenience.
+    """
+    from mva.agent.tools.builtin import register_all
+    from mva.agent.tools.registry import get_default_registry
+    from mva.agent.skills import discover_skills
+
+    # -- Reload tools ---------------------------------------------------------
+    registry = get_default_registry()
+    registry.reload_all(builtins_fn=register_all)
+
+    from mva.agent import get_tool_defs
+    agent_session.tools = get_tool_defs()
+
+    # -- Reload skills (preserve toggle state) --------------------------------
+    old_state = {s.name: s.enabled for s in skills}
+    new_skills = discover_skills()
+
+    # Merge: carry over enabled/disabled state for surviving skills
+    for s in new_skills:
+        if s.name in old_state:
+            s.enabled = old_state[s.name]
+
+    # Mutate the list in-place so the REPL's reference stays valid
+    skills.clear()
+    skills.extend(new_skills)
+
+    _console.print("[green]✓ Tools and skills reloaded.[/]")
+    _print_tools()
+    _print_skills(skills)
+
+    return skills
+
+
+# ---------------------------------------------------------------------------
 # Command dispatch
 # ---------------------------------------------------------------------------
 
@@ -362,6 +446,11 @@ def handle_command(
     if cmd.startswith("provider "):
         _switch_provider(client, cmd[9:].strip())
         return True
+
+    if cmd == "reload":
+        # Reload handled specially — needs session + skills mutation
+        # (returns a sentinel so the caller knows to pass them)
+        return _RELOAD_SENTINEL
 
     if cmd == "tools":
         _print_tools()

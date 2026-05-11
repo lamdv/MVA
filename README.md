@@ -49,6 +49,7 @@ The following tools are available out-of-the-box:
 | :--- | :--- |
 | `read` | Reads text or image files (supports `offset` and `limit`). |
 | `write` | Writes content to a file (creates directories automatically). |
+| `edit` | Edits an existing file by replacing a specific block of text. |
 | `list_files` | Recursively lists directory contents with a depth limit. |
 | `bash` | Executes bash commands in a sandboxed environment. |
 | `ls` | An alias for `list_files`. |

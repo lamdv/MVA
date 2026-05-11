@@ -16,8 +16,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style as PTStyle
 
-from mva.agent import LLMClient
-from mva.skills import SkillDef
+from mva.agent import LLMClient, SkillDef
 
 # ---------------------------------------------------------------------------
 # History path

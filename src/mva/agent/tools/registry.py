@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from mva.tools.base import FunctionTool, SecurityCheck, Tool, ToolResult
+from mva.agent.tools.base import FunctionTool, SecurityCheck, Tool, ToolResult
 
 
 # ---------------------------------------------------------------------------
@@ -220,8 +220,48 @@ class ToolRegistry:
     # -- Lifecycle ---------------------------------------------------------
 
     def reload(self) -> None:
-        """Clear all tools and re-discover from scratch."""
+        """Clear all tools from the registry (no re-discovery)."""
         self._tools.clear()
+
+    def reload_all(
+        self,
+        *,
+        builtins_fn: Any = None,
+        discover_entry_points: bool = True,
+        discover_walk_up: str | None = ".mva/tools",
+        discover_home: bool = True,
+    ) -> None:
+        """Clear all tools and re-discover from all sources.
+
+        This is the hot-reload entry point.  It wipes the registry
+        then re-discovers everything in the standard order so that
+        closer sources override more distant ones.
+
+        Parameters
+        ----------
+        builtins_fn:
+            A callable that re-registers built-in tools on this
+            registry, e.g. ``register_all`` from
+            ``mva.agent.tools.builtin``.
+        discover_entry_points:
+            Whether to re-scan pip entry points (``mva.tools`` group).
+        discover_walk_up:
+            Relative directory to scan walking up from CWD, or
+            ``None`` to skip.
+        discover_home:
+            Whether to scan ``~/.mva/tools/``.
+        """
+        self._tools.clear()
+
+        if builtins_fn is not None:
+            builtins_fn(self)
+        if discover_entry_points:
+            self.discover_entry_points()
+        if discover_walk_up is not None:
+            self.discover_walk_up(discover_walk_up)
+        if discover_home:
+            home_tools = Path.home() / ".mva" / "tools"
+            self.discover_dirs(str(home_tools))
 
     def unregister(self, name: str) -> bool:
         """Remove a tool by name.  Returns ``True`` if it was registered."""

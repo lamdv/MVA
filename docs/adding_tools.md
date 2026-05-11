@@ -44,7 +44,7 @@ Your function must return a `ToolResult` object.
 If your tool interacts with the file system, network, or shell, you must implement the security stack used by existing tools:
 
 1.  **Include `_confirmed`**: Always include `_confirmed: bool = False` in your function signature.
-2.  **Perform Escape Checks**: If your tool accepts paths, use `check_file_path_escape` from `mva.tools.path_security`.
+2.  **Perform Escape Checks**: If your tool accepts paths, use `check_file_path_escape` from `mva.agent.tools.path_security`.
 3.  **Handle User Approval**: If a security check fails, return a `ToolResult` that triggers the REPL's confirmation prompt:
 
 ```python

@@ -10,8 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from mva.tools.base import SecurityCheck, Tool, ToolResult
-from mva.tools.path_security import check_bash_escape
+from mva.agent.tools.base import SecurityCheck, Tool, ToolResult
+from mva.agent.tools.path_security import check_bash_escape
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -19,6 +19,9 @@ from mva.tools.path_security import check_bash_escape
 
 _MAX_OUTPUT_LINES = 2000
 _MAX_OUTPUT_BYTES = 50 * 1024
+
+# Resolve the user's current shell (defaults to /bin/bash if $SHELL is unset)
+_CURRENT_SHELL: str = os.environ.get("SHELL", "/bin/bash")
 
 _DANGEROUS_PATTERNS: list[tuple[str, str]] = [
     (r"rm\s+-rf\s+[/~]", "rm -rf on root/home"),
@@ -157,13 +160,13 @@ class BashTool(Tool):
             "PWD": cwd,
             "USER": os.environ.get("USER", "user"),
             "LANG": "C.UTF-8",
-            "SHELL": "/bin/bash",
+            "SHELL": _CURRENT_SHELL,
             "TERM": "dumb",
         }
 
         try:
             proc = subprocess.Popen(
-                ["/bin/bash", "-c", command],
+                [_CURRENT_SHELL, "-c", command],
                 cwd=cwd,
                 env=sandbox_env,
                 stdout=subprocess.PIPE,
@@ -173,7 +176,7 @@ class BashTool(Tool):
             )
         except FileNotFoundError:
             return ToolResult(
-                content="Error: /bin/bash not found on this system.",
+                content=f"Error: {_CURRENT_SHELL} not found on this system.",
                 is_error=True,
             )
         except Exception as exc:

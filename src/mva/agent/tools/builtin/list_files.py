@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from mva.tools.base import SecurityCheck, Tool, ToolResult
-from mva.tools.path_security import check_file_path_escape
+from mva.agent.tools.base import SecurityCheck, Tool, ToolResult
+from mva.agent.tools.path_security import check_file_path_escape
 
 
 class ListFilesTool(Tool):

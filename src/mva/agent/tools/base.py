@@ -1,9 +1,11 @@
 """Base types for the MVA tool system.
 
 Defines the core abstractions that all tools share:
-:class:`Tool` — abstract base class for all tools
-:class:`ToolResult` — result of executing a tool
-:class:`SecurityCheck` — outcome of a security evaluation
+
+* :class:`ToolDef` — API-facing definition of a callable function
+* :class:`Tool` — abstract base class for all tools
+* :class:`ToolResult` — result of executing a tool
+* :class:`SecurityCheck` — outcome of a security evaluation
 """
 
 from __future__ import annotations
@@ -12,7 +14,28 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from mva.agent import ToolDef
+
+# ---------------------------------------------------------------------------
+# ToolDef
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ToolDef:
+    """Definition of a tool (function) the model can call.
+
+    Sent to the OpenAI-compatible API as part of the ``tools`` parameter
+    in chat completion requests.
+    """
+
+    name: str
+    """Tool identifier (must match the registered tool name)."""
+
+    description: str
+    """Human-readable description shown to the LLM."""
+
+    parameters: dict[str, Any]
+    """JSON Schema describing the tool's arguments."""
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +115,7 @@ class Tool(ABC):
     """Optional one-liner for the system prompt's tool list."""
 
     def to_tool_def(self) -> ToolDef:
-        """Convert this tool into a :class:`~mva.agent.ToolDef` for the API."""
+        """Convert this tool into a :class:`ToolDef` for the API."""
         return ToolDef(
             name=self.name,
             description=self.description,

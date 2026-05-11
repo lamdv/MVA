@@ -1,9 +1,12 @@
-"""MVA agent layer — LLM client + conversation session.
+"""MVA agent layer — LLM client, conversation session, tools, and skills.
 
-Re-exports everything from ``client.py`` and ``session.py`` so consumers
-import from ``mva.agent``:
+The single public surface for the agent.  Everything needed to build a
+conversational agent is accessible from ``mva.agent``::
 
-    from mva.agent import LLMClient, Session, StreamingDelta, ToolDef
+    from mva.agent import (
+        LLMClient, Session, ToolDef, execute_tool,
+        SkillDef, discover_skills,
+    )
 """
 
 from mva.agent.client import (
@@ -17,6 +20,14 @@ from mva.agent.client import (
     ToolDef,
 )
 
+# -- Re-export select tools symbols ----------------------------------------
+# These must come before session import: session -> mva.utils -> mva.agent
+from mva.agent.tools import execute_tool, get_tool_defs, ToolResult
+
+# -- Re-export select skills symbols ---------------------------------------
+# Same ordering constraint as above.
+from mva.agent.skills import SkillDef, build_skills_prompt, discover_skills
+
 from mva.agent.session import Session
 
 __all__ = [
@@ -29,4 +40,12 @@ __all__ = [
     "Session",
     "StreamingDelta",
     "ToolDef",
+    # tools
+    "execute_tool",
+    "get_tool_defs",
+    "ToolResult",
+    # skills
+    "SkillDef",
+    "build_skills_prompt",
+    "discover_skills",
 ]

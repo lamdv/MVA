@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
-from mva.tools.base import SecurityCheck
+from mva.agent.tools.base import SecurityCheck
 
 
 # ---------------------------------------------------------------------------
@@ -73,12 +73,21 @@ def check_bash_escape(command: str, cwd: str) -> SecurityCheck:
 
     # -- 1. Absolute system paths ------------------------------------------
     for root in _BLOCKED_SYSTEM_ROOTS:
-        if root in command:
-            return SecurityCheck(
-                safe=False,
-                message=f"Command references system path '{root}/...'",
-                offending_path=root,
-            )
+        if root not in command:
+            continue
+
+        # /dev/null is a harmless redirect target — allow it
+        if root == "/dev":
+            dev_refs = set(re.findall(r'/dev/\S+', command))
+            non_null_refs = [r for r in dev_refs if r != "/dev/null"]
+            if not non_null_refs:
+                continue
+
+        return SecurityCheck(
+            safe=False,
+            message=f"Command references system path '{root}/...'",
+            offending_path=root,
+        )
 
     # -- 2. Home-directory escapes -----------------------------------------
     for pattern in _HOME_ESCAPE_PATTERNS:

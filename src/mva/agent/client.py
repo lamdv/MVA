@@ -9,6 +9,7 @@ from typing import Any, Generator
 import requests
 
 from mva.config import ConfigError, load_config
+from mva.agent.tools import ToolDef
 
 
 # ---------------------------------------------------------------------------
@@ -57,15 +58,6 @@ class ChatResponse:
     choices: list[ChatChoice] = field(default_factory=list)
     usage: CompletionUsage | None = None
     raw: dict[str, Any] | None = None
-
-
-@dataclass
-class ToolDef:
-    """Definition of a tool (function) the model can call."""
-
-    name: str
-    description: str
-    parameters: dict[str, Any]  # JSON Schema for the arguments
 
 
 # ---------------------------------------------------------------------------

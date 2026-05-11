@@ -7,19 +7,15 @@ the REPL loop or single-run handler.
 from __future__ import annotations
 
 import sys
-from typing import Any
 
 import typer
 from rich.console import Console
 
 from mva.cli.console import _create_prompt_session, set_client, set_skills
 from mva.cli.repl import _repl, _run_single
-from mva.agent import LLMClient, Session
-from mva.skills import SkillDef, discover_skills
-from mva.tools import get_tool_defs
+from mva.agent import LLMClient, Session, discover_skills, get_tool_defs
 from mva.utils import (
     build_system_prompt,
-    goodbye,
     install_signal_handler,
     print_header,
 )

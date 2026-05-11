@@ -23,9 +23,9 @@ import json
 from typing import Any, Generator
 
 from mva.agent import ChatMessage, LLMClient, LLMError, StreamingDelta, ToolDef
-from mva.tools import ToolResult, execute_tool
-from mva.utils import build_messages
-from mva.utils import is_cancel_requested
+from mva.agent.tools import ToolResult, execute_tool
+from mva.utils import build_messages, is_cancel_requested
+from mva.utils import _mark_streaming_start, _mark_streaming_stop
 
 MAX_TOOL_ROUNDS = 10
 
@@ -187,15 +187,19 @@ class Session:
             final_tool_calls: list[dict[str, Any]] | None = None
             final_delta: StreamingDelta | None = None
             cancelled = False
+            _emitted_tc_count: int = 0  # track tool calls already yielded
 
-            # Stream from the LLM
-            for delta in self.client.chat_stream(
-                messages, tools=self.tools if self.tools else None
-            ):
-                # Check for user cancellation
-                if is_cancel_requested():
-                    cancelled = True
-                    break
+            # Mark streaming active so Ctrl+C cancels instead of exiting
+            _mark_streaming_start()
+            try:
+                # Stream from the LLM
+                for delta in self.client.chat_stream(
+                    messages, tools=self.tools if self.tools else None
+                ):
+                    # Check for user cancellation
+                    if is_cancel_requested():
+                        cancelled = True
+                        break
 
                 # Yield thinking / delta events
                 if delta.thinking_delta:
@@ -207,9 +211,23 @@ class Session:
                     cancelled = True
                     break
 
+                # Yield tool-call events as soon as they appear in the stream,
+                # before the stream finishes.  New tool calls are detected by
+                # checking whether the accumulated list has grown.
                 if delta.tool_calls:
                     final_tool_calls = delta.tool_calls
+                    while len(delta.tool_calls) > _emitted_tc_count:
+                        tc = delta.tool_calls[_emitted_tc_count]
+                        _emitted_tc_count += 1
+                        yield {
+                            "type": TOOL_CALL,
+                            "id": tc.get("id", ""),
+                            "name": tc["function"]["name"],
+                            "args": tc["function"]["arguments"],
+                        }
                 final_delta = delta
+            finally:
+                _mark_streaming_stop()
 
             if cancelled:
                 yield {"type": CANCELLED}
@@ -239,6 +257,7 @@ class Session:
                 })
 
                 # Execute each tool call
+                # (TOOL_CALL events were already emitted during streaming)
                 for tc in final_tool_calls:
                     tc_id = tc.get("id", "")
                     fn_name = tc["function"]["name"]
@@ -248,8 +267,6 @@ class Session:
                             fn_args = json.loads(fn_args)
                         except json.JSONDecodeError:
                             fn_args = {}
-
-                    yield {"type": TOOL_CALL, "id": tc_id, "name": fn_name, "args": fn_args}
 
                     result = self._execute_with_confirmation(
                         fn_name, fn_args, print_mode=print_mode

@@ -4,7 +4,7 @@ Tools follow the OpenAI function calling convention.  There are two
 styles for defining tools:
 
 **Class-based** (for built-in / complex tools) — subclass
-:class:`~mva.tools.base.Tool`:
+:class:`~mva.agent.tools.base.Tool`:
 
     class MyTool(Tool):
         name = "my_tool"
@@ -41,19 +41,20 @@ default registry.
 
 from __future__ import annotations
 
-from mva.tools.base import FunctionTool, SecurityCheck, Tool, ToolResult
-from mva.tools.registry import (
+from mva.agent.tools.base import FunctionTool, SecurityCheck, Tool, ToolDef, ToolResult
+from mva.agent.tools.registry import (
     ToolRegistry,
     execute_tool,
     get_default_registry,
     get_tool_defs,
 )
-from mva.tools.builtin import register_all as _register_builtins
+from mva.agent.tools.builtin import register_all as _register_builtins
 
 __all__ = [
     "FunctionTool",
     "SecurityCheck",
     "Tool",
+    "ToolDef",
     "ToolRegistry",
     "ToolResult",
     "execute_tool",
@@ -92,9 +93,4 @@ def _register(
 
 _registry = get_default_registry()
 if not _registry.list_tools():
-    _register_builtins(_registry)
-    # Discover external tools
-    _registry.discover_entry_points()
-    _registry.discover_walk_up(".mva/tools")
-    home_tools = __import__("pathlib").Path.home() / ".mva" / "tools"
-    _registry.discover_dirs(str(home_tools))
+    _registry.reload_all(builtins_fn=_register_builtins)

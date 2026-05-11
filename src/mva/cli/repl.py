@@ -14,14 +14,14 @@ from rich.console import Console
 from rich.panel import Panel
 
 from mva.cli.renderer import render_event, reset_renderer
-from mva.agent import LLMClient, LLMError, Session
-from mva.skills import SkillDef
-from mva.tools import get_tool_defs
+from mva.agent import LLMClient, LLMError, Session, SkillDef, get_tool_defs
 from mva.utils import (
     build_system_prompt,
     goodbye,
     handle_command,
     print_header,
+    reload_environment,
+    _RELOAD_SENTINEL,
 )
 
 _console = Console()
@@ -103,6 +103,21 @@ def _repl(
             result = handle_command(raw, history, client, skills=skills)
             if result is False:
                 break
+            if result is _RELOAD_SENTINEL:
+                reload_environment(agent_session, skills)
+                # Rebuild the system prompt immediately so the next
+                # message uses the freshly reloaded tools + skills
+                agent_session.system_prompt = build_system_prompt(
+                    get_tool_defs(),
+                    skills=skills,
+                    agent_md_path=agent_md_path,
+                    system_prompt=system_prompt,
+                    append_system_prompt=append_system_prompt,
+                )
+                _console.print(
+                    "[dim]System prompt updated with reloaded tools"
+                    " and skills.[/]"
+                )
             continue
 
         # Show current model/provider as a subtle reminder
