@@ -1,0 +1,56 @@
+# MVA Model Configuration
+# =======================
+#
+# Priority: ./.mva/model.yaml > ~/.config/mva/model.yaml > env vars
+#
+# Multiple providers can be defined below.  Set `provider` to the key
+# of the active provider to switch between them.
+
+# Active provider key (must match a key in `providers`)
+provider: llamaswap
+
+providers:
+  # -- Local vLLM / Ollama server --
+  llamaswap:
+    type: openai
+    base_url: http://127.0.0.1:8001/v1
+    api_key: no-key
+    default_model: gemma-4-4B-abliterated
+    models:
+      - gemma-4-4B-abliterated
+    timeout: 120
+
+  # -- DeepSeek cloud API --
+  deepseek:
+    type: openai
+    base_url: https://api.deepseek.com
+    api_key: sk-8b5dcfab93fd4367a3fee39c1a53d7f1
+    default_model: deepseek-v4-flash
+    models:
+      - deepseek-v4-flash
+      - deepseek-v4-pro
+    timeout: 120
+
+  # -- Additional providers (examples, commented out) --
+  # anthropic:
+  #   type: anthropic
+  #   base_url: https://api.anthropic.com/v1
+  #   api_key: sk-ant-...
+  #   default_model: claude-3-5-sonnet-20241022
+  #   models:
+  #     - claude-3-5-sonnet-20241022
+  #     - claude-3-opus-20240229
+  #   timeout: 120
+  #
+  # ollama:
+  #   type: openai
+  #   base_url: http://localhost:11434/v1
+  #   api_key: no-key
+  #   default_model: llama3.2
+  #   models:
+  #     - llama3.2
+  #     - codellama
+  #   timeout: 120
+
+# Directory for sandboxed file operations
+sandbox_dir: ./sandbox
