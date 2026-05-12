@@ -12,11 +12,13 @@ from typing import Any
 from prompt_toolkit import PromptSession
 from rich.console import Console
 from rich.panel import Panel
+from rich.syntax import Syntax
 
-from mva.cli.renderer import render_event, reset_renderer
+from mva.cli.renderer import render_event, reset_renderer, start_spinner, stop_spinner
 from mva.agent import LLMError, Session, SkillDef, get_tool_defs
-from mva.utils import (
-    build_system_prompt,
+from mva.agent._system import build_system_prompt
+from mva.cli._commands import (
+    _save_session,
     goodbye,
     handle_command,
     print_header,
@@ -34,14 +36,18 @@ _last_model_context: str = ""
 
 
 def _show_model_context(session: Session) -> None:
-    """Show the current model/provider as a subtle one-liner (when it changes)."""
+    """Show the current model/provider + cumulative token usage."""
     global _last_model_context  # noqa: PLW0603
     prov = session.current_provider or "?"
     model = session.client.default_model or ""
     ctx = f"[dim]⚡ {prov}"
     if model:
         ctx += f" / {model}"
-    ctx += "[/]"
+    usage = session.total_usage
+    if usage and usage.total_tokens > 0:
+        ctx += f"  │  📊 {usage.total_tokens}∑[/]"
+    else:
+        ctx += "[/]"
     if ctx != _last_model_context:
         _console.print(ctx)
         _last_model_context = ctx
@@ -82,6 +88,7 @@ def _repl(
     system_prompt: str | None = None,
     append_system_prompt: str | None = None,
     agent_md_path: str | None = "AGENT.md",
+    auto_confirm: bool = False,
 ) -> None:
     """Interactive REPL: read-eval-print loop for the MVA agent."""
     session.on_confirm = _confirm_callback
@@ -89,6 +96,9 @@ def _repl(
         try:
             raw = pt_session.prompt("You: ")
         except (EOFError, KeyboardInterrupt):
+            if session.history:
+                sid = _save_session(session.history, session)
+                _console.print(f"[dim]💾 Auto-saved. Load with: /load {sid}[/]")
             goodbye()
             break
 
@@ -100,6 +110,9 @@ def _repl(
         if raw.startswith("/"):
             result = handle_command(raw, session.history, session, skills=skills)
             if result is False:
+                if session.history:
+                    sid = _save_session(session.history, session)
+                    _console.print(f"[dim]💾 Auto-saved. Load with: /load {sid}[/]")
                 break
             if result is _RELOAD_SENTINEL:
                 reload_environment(session, skills)
@@ -133,10 +146,17 @@ def _repl(
         reset_renderer()
 
         try:
-            for event in session.chat(raw):
+            start_spinner()
+            for event in session.chat(raw, auto_confirm=auto_confirm):
                 render_event(event)
         except LLMError as exc:
+            stop_spinner()
             _console.print(f"\n[red]Error:[/] {exc}")
+            # Strip the failed user message from history so the
+            # model doesn't see it again on the next attempt
+            if session.history and session.history[-1]["role"] == "user":
+                session.history.pop()
+            _console.print("[dim]Message discarded. Re-type it or try something else.[/]")
             continue
 
         print()
@@ -154,6 +174,8 @@ def _run_single(
     system_prompt: str | None = None,
     append_system_prompt: str | None = None,
     agent_md_path: str | None = "AGENT.md",
+    max_tool_rounds: int = 10,
+    auto_confirm: bool = False,
 ) -> str | None:
     """Run a single task non-interactively.
 
@@ -176,11 +198,15 @@ def _run_single(
         tools=tools,
         system_prompt=system,
         on_confirm=None,  # auto-deny in print mode
+        max_tool_rounds=max_tool_rounds,
     )
 
     try:
         final_text = ""
-        for event in session.chat(user_message, print_mode=True):
+        start_spinner()
+        for event in session.chat(
+            user_message, print_mode=(not auto_confirm), auto_confirm=auto_confirm
+        ):
             if event.get("type") == "done":
                 final_text = event.get("content", "")
             # Print streaming content directly
@@ -189,15 +215,31 @@ def _run_single(
             elif event.get("type") == "delta":
                 _console.print(event["content"], end="")
             elif event.get("type") == "tool_call":
+                stop_spinner()
                 print()
                 _console.print(f"  [dim]{event['name']}({event['args']})[/]")
             elif event.get("type") == "tool_result":
-                preview = event["content"][:80].replace("\n", " ")
-                if event["is_error"]:
-                    _console.print(f"  [red]✗ {preview}[/]")
+                content = event["content"]
+                is_error = event["is_error"]
+                # Check for diff section
+                diff_marker = "\nDiff:\n"
+                diff_idx = content.find(diff_marker)
+                if not is_error and diff_idx != -1:
+                    summary = content[:diff_idx].strip()
+                    diff_text = content[diff_idx + len(diff_marker):].strip()
+                    _console.print(f"  [dim green]→ {summary}[/]")
+                    if diff_text:
+                        _console.print(
+                            Syntax(diff_text, "diff", theme="ansi_dark", line_numbers=False)
+                        )
                 else:
-                    _console.print(f"  [dim green]→ {preview}…[/]")
+                    preview = content[:80].replace("\n", " ")
+                    if is_error:
+                        _console.print(f"  [red]✗ {preview}[/]")
+                    else:
+                        _console.print(f"  [dim green]→ {preview}…[/]")
         return final_text
     except LLMError as exc:
+        stop_spinner()
         _console.print(f"\n[red]Error:[/] {exc}")
         return None

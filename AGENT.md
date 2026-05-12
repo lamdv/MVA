@@ -142,6 +142,19 @@ See `docs/adding_tools.md` for the full guide.
 - Private helpers prefixed with `_`
 - No external imports beyond the dependency list in `pyproject.toml`
 
+## Docs index
+
+| Document | What it covers |
+|:---|---|
+| `docs/design.md` | Full architecture, design decisions, data flow, event system |
+| `docs/model_yaml_format.md` | `model.yaml` schema and search order |
+| `docs/provider_integration.md` | Configuring DeepSeek, Kimi, OpenRouter, Anthropic, VS Code Copilot proxy |
+| `docs/adding_tools.md` | Adding new tools (class-based and imperative patterns) |
+| `docs/security.md` | Four-layer security model |
+| `docs/memory_system.md` | Memory/persistence system |
+| `docs/cli_improvements.md` | Planned CLI improvements roadmap (3 phases, ~30 hours total) |
+| `docs/v2.1_monorepo_plan.md` | Monorepo split into `mva-core` + `mva-cli` |
+
 ## Key files to know
 
 | File | When to edit |

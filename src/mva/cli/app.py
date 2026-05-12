@@ -12,13 +12,12 @@ import typer
 from rich.console import Console
 
 from mva.cli.console import _create_prompt_session, set_session, set_skills
+from mva.cli.renderer import set_markdown_mode
 from mva.cli.repl import _repl, _run_single
 from mva.agent import Session, discover_skills, get_tool_defs
-from mva.utils import (
-    build_system_prompt,
-    install_signal_handler,
-    print_header,
-)
+from mva.config import load_config
+from mva.agent._system import build_system_prompt, install_signal_handler
+from mva.cli._commands import print_header
 
 _console = Console()
 
@@ -61,6 +60,18 @@ def app(
         "-nc",
         help="Disable AGENT.md context file loading.",
     ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Auto-approve security confirmations (use with caution).",
+    ),
+    markdown: bool = typer.Option(
+        False,
+        "--markdown",
+        "-m",
+        help="Render model output as formatted Markdown.",
+    ),
 ) -> None:
     """Launch the MVA interactive REPL, or run a single task non-interactively."""
     install_signal_handler()
@@ -83,6 +94,13 @@ def app(
     session: Session | None = None
     agent_md_path: str | None = None if no_context_files else "AGENT.md"
 
+    # Load config for global session settings
+    cfg = load_config()
+
+    # Enable Markdown rendering if requested
+    if markdown:
+        set_markdown_mode(True)
+
     try:
         if print_mode or message:
             # Non-interactive single-run mode
@@ -92,6 +110,8 @@ def app(
                 system_prompt=system_prompt,
                 append_system_prompt=append_system_prompt,
                 agent_md_path=agent_md_path,
+                max_tool_rounds=cfg.max_tool_rounds,
+                auto_confirm=yes,
             )
         else:
             # Interactive REPL
@@ -110,6 +130,7 @@ def app(
                 tools=tools,
                 system_prompt=system,
                 on_confirm=None,  # set by _repl when needed
+                max_tool_rounds=cfg.max_tool_rounds,
             )
             set_session(session)
 
@@ -121,6 +142,7 @@ def app(
                 system_prompt=system_prompt,
                 append_system_prompt=append_system_prompt,
                 agent_md_path=agent_md_path,
+                auto_confirm=yes,
             )
     finally:
         if session is not None:

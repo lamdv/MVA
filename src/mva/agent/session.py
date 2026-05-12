@@ -24,12 +24,12 @@ import json
 from typing import Any, Generator
 
 from mva.agent.client import LLMClient
-from mva.agent.types import ChatMessage, LLMError, StreamingDelta
+from mva.agent.types import ChatMessage, CompletionUsage, LLMError, StreamingDelta
 from mva.agent.tools import ToolDef, ToolResult, execute_tool
-from mva.utils import build_messages, is_cancel_requested
-from mva.utils import _mark_streaming_start, _mark_streaming_stop
+from mva.agent._system import build_messages, is_cancel_requested
+from mva.agent._system import _mark_streaming_start, _mark_streaming_stop
 
-MAX_TOOL_ROUNDS = 10
+DEFAULT_MAX_TOOL_ROUNDS = 10
 
 # ---------------------------------------------------------------------------
 # Event types (simple dicts for maximum portability)
@@ -89,6 +89,9 @@ class Session:
         Called when a tool requires user confirmation.
         Signature: ``on_confirm(message: str, tool: str, args: dict) -> bool``
         Return ``True`` to approve, ``False`` to deny, or ``None`` to auto-deny.
+    max_tool_rounds : int
+        Maximum number of tool-calling rounds per turn.
+        Defaults to :const:`DEFAULT_MAX_TOOL_ROUNDS` (10).
     """
 
     def __init__(
@@ -98,11 +101,13 @@ class Session:
         *,
         client: LLMClient | None = None,
         on_confirm: Any = None,
+        max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
     ) -> None:
         self.client = client or LLMClient.from_config()
         self.tools = tools[:]
         self._system_prompt = system_prompt
         self.on_confirm = on_confirm
+        self.max_tool_rounds = max_tool_rounds
 
         # Provider / model state (used by CLI for /model, /provider commands)
         self.current_provider: str | None = None
@@ -113,6 +118,10 @@ class Session:
 
         # Owned state
         self.history: list[dict[str, Any]] = []
+
+        # Token usage tracking
+        self.total_usage = CompletionUsage()
+        """Cumulative token usage across all turns in this session."""
 
     # ------------------------------------------------------------------
     # Provider / model management
@@ -167,13 +176,21 @@ class Session:
         """Set the active model within the current provider.
 
         If *available_models* is non-empty, *model_name* must appear in
-        that list.  When the list is empty, the model is set
-        unconditionally (backward-compatible behaviour).
+        that list (case-insensitive comparison).  When the list is
+        empty, the model is set unconditionally (backward-compatible
+        behaviour).
 
         Returns ``True`` on success.
         """
-        if self._available_models and model_name not in self._available_models:
-            return False
+        if self._available_models:
+            lower = model_name.lower()
+            if lower not in {m.lower() for m in self._available_models}:
+                return False
+            # Preserve the canonical casing from the config
+            for m in self._available_models:
+                if m.lower() == lower:
+                    model_name = m
+                    break
         self.client.default_model = model_name
         return True
 
@@ -182,6 +199,20 @@ class Session:
         """Return the list of available model names for the current
         provider (may be empty if none were declared in config)."""
         return list(self._available_models)
+
+    def test_connection(self) -> tuple[bool, str]:
+        """Test the current provider connection with a minimal request.
+
+        Delegates to :meth:`LLMClient.test_connection`.
+
+        Returns
+        -------
+        (True, "")
+            The provider responded successfully.
+        (False, error_message)
+            Something went wrong — see the string for details.
+        """
+        return self.client.test_connection()
 
     # ------------------------------------------------------------------
     # Public API
@@ -214,6 +245,7 @@ class Session:
         user_message: str,
         *,
         print_mode: bool = False,
+        auto_confirm: bool = False,
     ) -> Generator[dict[str, Any]]:
         """Process a user message through the tool-calling loop.
 
@@ -228,6 +260,9 @@ class Session:
         print_mode : bool
             When ``True``, confirmation prompts are auto-denied
             (used for non-interactive ``--print`` mode).
+        auto_confirm : bool
+            When ``True``, security confirmations are auto-approved
+            (used for non-interactive ``--yes`` mode).
 
         Yields
         ------
@@ -242,7 +277,9 @@ class Session:
         # Drop the trailing empty user message from build_messages
         messages = [m for m in messages if m.role != "user" or m.content]
 
-        yield from self._handle_turn(messages, print_mode=print_mode)
+        yield from self._handle_turn(
+            messages, print_mode=print_mode, auto_confirm=auto_confirm
+        )
 
     def close(self) -> None:
         """Release client resources."""
@@ -257,6 +294,7 @@ class Session:
         messages: list[ChatMessage],
         *,
         print_mode: bool = False,
+        auto_confirm: bool = False,
     ) -> Generator[dict[str, Any]]:
         """Run the tool-calling loop for a single turn.
 
@@ -265,7 +303,7 @@ class Session:
         """
         rounds = 0
 
-        while rounds < MAX_TOOL_ROUNDS:
+        while rounds < self.max_tool_rounds:
             rounds += 1
             final_tool_calls: list[dict[str, Any]] | None = None
             final_delta: StreamingDelta | None = None
@@ -367,7 +405,8 @@ class Session:
                             fn_args = {}
 
                     result = self._execute_with_confirmation(
-                        fn_name, fn_args, print_mode=print_mode
+                        fn_name, fn_args,
+                        print_mode=print_mode, auto_confirm=auto_confirm,
                     )
 
                     yield {
@@ -397,9 +436,22 @@ class Session:
                     "reasoning_content": final_delta.reasoning_content,
                 })
 
+            # Track token usage
+            event_usage = None
+            if final_delta and final_delta.usage:
+                event_usage = {
+                    "prompt_tokens": final_delta.usage.prompt_tokens,
+                    "completion_tokens": final_delta.usage.completion_tokens,
+                    "total_tokens": final_delta.usage.total_tokens,
+                }
+                self.total_usage.prompt_tokens += final_delta.usage.prompt_tokens
+                self.total_usage.completion_tokens += final_delta.usage.completion_tokens
+                self.total_usage.total_tokens += final_delta.usage.total_tokens
+
             yield {
                 "type": DONE,
                 "content": (final_delta.accumulated if final_delta else ""),
+                "usage": event_usage,
             }
             return
 
@@ -409,7 +461,7 @@ class Session:
             "role": "assistant",
             "content": "I've reached the tool-calling limit. Please ask a simpler question.",
         })
-        yield {"type": DONE, "content": msg}
+        yield {"type": DONE, "content": msg, "usage": None}
 
     # ------------------------------------------------------------------
     # Internal: tool execution with confirmation
@@ -421,11 +473,21 @@ class Session:
         fn_args: dict[str, Any],
         *,
         print_mode: bool = False,
+        auto_confirm: bool = False,
     ) -> ToolResult:
         """Execute a tool, handling confirmation loops via the callback."""
         result = execute_tool(fn_name, fn_args)
 
         while result.needs_confirmation:
+            if auto_confirm:
+                # Trust the model — auto-approve
+                result = execute_tool(
+                    result.confirmation_tool,
+                    result.confirmation_args,
+                    confirmed=True,
+                )
+                continue
+
             if print_mode:
                 msg = result.confirmation_message.split("\n")[0]
                 return ToolResult(

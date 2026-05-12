@@ -18,6 +18,7 @@ providers:
     default_model: gemma-4-4B-abliterated
     models:
       - gemma-4-4B-abliterated
+      - gemma-4-26B-A4B
     timeout: 120
 
   # -- DeepSeek cloud API --
@@ -30,27 +31,3 @@ providers:
       - deepseek-v4-flash
       - deepseek-v4-pro
     timeout: 120
-
-  # -- Additional providers (examples, commented out) --
-  # anthropic:
-  #   type: anthropic
-  #   base_url: https://api.anthropic.com/v1
-  #   api_key: sk-ant-...
-  #   default_model: claude-3-5-sonnet-20241022
-  #   models:
-  #     - claude-3-5-sonnet-20241022
-  #     - claude-3-opus-20240229
-  #   timeout: 120
-  #
-  # ollama:
-  #   type: openai
-  #   base_url: http://localhost:11434/v1
-  #   api_key: no-key
-  #   default_model: llama3.2
-  #   models:
-  #     - llama3.2
-  #     - codellama
-  #   timeout: 120
-
-# Directory for sandboxed file operations
-sandbox_dir: ./sandbox

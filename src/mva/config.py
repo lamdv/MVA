@@ -69,6 +69,9 @@ class ModelConfig:
     sandbox_dir: str = "./sandbox"
     """Directory for sandboxed file operations."""
 
+    max_tool_rounds: int = 10
+    """Maximum number of tool-calling rounds per turn (default: 10)."""
+
 
 # ---------------------------------------------------------------------------
 # Discovery
@@ -208,6 +211,7 @@ def _load_yaml(path: Path) -> ModelConfig:
         provider=str(raw.get("provider", list(providers)[0])),
         providers=providers,
         sandbox_dir=str(raw.get("sandbox_dir", "./sandbox")),
+        max_tool_rounds=int(raw.get("max_tool_rounds", 10)),
     )
 
 
@@ -264,6 +268,7 @@ def _config_from_env() -> ModelConfig:
             ),
         },
         sandbox_dir=os.environ.get("SANDBOX_DIR", "./sandbox"),
+        max_tool_rounds=int(os.environ.get("MAX_TOOL_ROUNDS", "10")),
     )
 
 

@@ -6,6 +6,8 @@ Provides the :class:`MVACompleter`, key bindings, toolbar factory, and
 
 from __future__ import annotations
 
+import os
+import glob
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +89,12 @@ class MVACompleter(Completer):
         "/providers",
         "/tools",
         "/skills",
+        "/export",
+        "/save",
+        "/load",
+        "/sessions",
+        "/saves",
+        "/delete",
     ]
 
     def get_completions(
@@ -205,7 +213,23 @@ class MVACompleter(Completer):
                     )
             return
 
-        # No completions for regular text input
+        # --- File path completions for regular text input ---
+        last_word = text.split()[-1] if text.strip() else ""
+        if last_word:
+            expanded = glob.glob(f"{last_word}*")
+            for path in sorted(set(expanded)):
+                display = path
+                meta = "file"
+                p = Path(path)
+                if p.is_dir():
+                    display += "/"
+                    meta = "directory"
+                yield Completion(
+                    display,
+                    start_position=-len(last_word),
+                    display=display,
+                    display_meta=meta,
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -238,7 +262,7 @@ def _build_key_bindings() -> KeyBindings:
 
 
 def _get_bottom_toolbar() -> str:
-    """Return the current model/provider info for the bottom toolbar."""
+    """Return the current model/provider info + token usage for the bottom toolbar."""
     if _session_ref is None:
         return "?"
     prov = _session_ref.current_provider or "?"
@@ -246,7 +270,18 @@ def _get_bottom_toolbar() -> str:
     ctx = f"⚡ {prov}"
     if model:
         ctx += f" / {model}"
+
+    usage = _session_ref.total_usage
+    if usage and usage.total_tokens > 0:
+        pt = _fmt_k(usage.prompt_tokens)
+        ct = _fmt_k(usage.completion_tokens)
+        tt = _fmt_k(usage.total_tokens)
+        ctx += f"  │  📊 {pt}↑ {ct}↓ {tt}∑"
+
     return ctx
+
+
+from mva.cli.renderer import _fmt_k
 
 
 # ---------------------------------------------------------------------------

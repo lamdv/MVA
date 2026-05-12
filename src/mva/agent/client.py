@@ -283,8 +283,8 @@ class LLMClient:
         if not model:
             raise ValueError("A model must be specified via argument or default_model.")
 
-        # Lazy import to avoid circular dependency with mva.utils
-        from mva.utils import is_cancel_requested  # noqa: PLC0415
+        # Lazy import to avoid circular dependency
+        from mva.agent._system import is_cancel_requested  # noqa: PLC0415
 
         body = self._build_request_body(
             messages,
@@ -379,6 +379,36 @@ class LLMClient:
                 delta="",
                 tool_calls=None,
             )
+
+    # -- Connection test ---------------------------------------------------
+
+    def test_connection(self, *, timeout: int = 10) -> tuple[bool, str]:
+        """Test the provider connection with a minimal ``max_tokens=1`` request.
+
+        Sends a single "ping" message and expects *any* valid response.
+        This verifies that the base URL is reachable, the API key is
+        accepted, and the default model exists on the server.
+
+        Returns
+        -------
+        (True, "")
+            On success — the provider responded.
+        (False, error_message)
+            On failure — a human-readable error string explaining what
+            went wrong (network error, bad status, model not found, etc.).
+        """
+        try:
+            self.chat(
+                [ChatMessage(role="user", content="ping")],
+                max_tokens=1,
+            )
+            return True, ""
+        except LLMError as exc:
+            return False, str(exc)
+        except requests.RequestException as exc:
+            return False, f"Network error: {exc}"
+        except Exception as exc:
+            return False, f"Unexpected error: {exc}"
 
     # -- Cleanup ------------------------------------------------------------
 
