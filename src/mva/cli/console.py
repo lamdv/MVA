@@ -240,10 +240,29 @@ class MVACompleter(Completer):
 def _build_key_bindings() -> KeyBindings:
     """Create key bindings for the REPL prompt.
 
-    - Ctrl+C / Ctrl+D: exit the prompt (returns empty string)
-    - Tab: triggers completion
+    Multi-line input with double-Enter submit:
+    - Enter on a non-empty line → inserts newline
+    - Enter on an empty line at end of buffer → submits
+    - Ctrl+C / Ctrl+D → cancel current input (returns empty string)
+    - Tab → triggers completion
     """
     kb = KeyBindings()
+
+    @kb.add("enter")
+    def _(event: Any) -> None:
+        """Submit on empty line, insert newline otherwise."""
+        buffer = event.current_buffer
+        text = buffer.text
+
+        if not text:
+            # Empty buffer → submit (REPL loop will skip it)
+            buffer.validate_and_handle()
+        elif text.endswith("\n"):
+            # Buffer ends with a newline → cursor is on an empty line → submit
+            buffer.validate_and_handle()
+        else:
+            # Non-empty line → insert newline
+            buffer.insert_text("\n")
 
     @kb.add("c-c")
     def _(event: Any) -> None:
@@ -278,6 +297,9 @@ def _get_bottom_toolbar() -> str:
         tt = _fmt_k(usage.total_tokens)
         ctx += f"  │  📊 {pt}↑ {ct}↓ {tt}∑"
 
+    # Multiline hint (faded)
+    ctx += "  │  [dim]↵↵ send[/]"
+
     return ctx
 
 
@@ -302,5 +324,5 @@ def _create_prompt_session() -> PromptSession:
         bottom_toolbar=_get_bottom_toolbar,
         complete_while_typing=True,
         vi_mode=False,
-        multiline=False,
+        multiline=True,
     )
