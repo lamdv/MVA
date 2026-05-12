@@ -32,6 +32,8 @@ This doc outlines planned improvements to the MVA CLI (`src/mva/cli/`), organize
 | 2.5 | `/edit` inline editor | ❌ **Dropped** | Out of scope |
 | 2.6 | Token usage display | ✅ **Done** | Per-turn `📊` one-liner + toolbar + `/usage` |
 | 3.1 | Visual diff in `edit` tool results | ✅ **Done** | `_unified_diff()` in edit tool + `Syntax(diff)` in renderer |
+| 3.2 | REPL Plugins / Hooks | ✅ **Done** | `REPLPlugin`, `PluginManager`, 4 discovery sources, `/plugins` command, `example_logger.py` |
+| 3.4 | Multi-line input editor | ✅ **Done** | `multiline=True` + double-Enter submit key binding, toolbar hint |
 
 ## Current State Summary
 
@@ -56,9 +58,7 @@ The CLI now has clean separation between core and UI layers:
 - ✅ Token usage visible in toolbar + per-turn + `/usage` command
 
 **Remaining pain points:**
-1. No provider connection test on switch
-2. No plugin system
-3. No multi-line input editor
+(none — all planned CLI improvements are complete)
 
 ---
 
@@ -375,27 +375,19 @@ Already implemented:
 
 ---
 
-### 3.2 REPL Plugins / Hooks
+### 3.2 REPL Plugins / Hooks ✅ **Done**
 
-**Problem:** Extending the REPL (custom prompts, pre/post-processing hooks, event listeners) currently requires modifying `repl.py` directly.
+**Implemented in:** `cli/plugins/__init__.py`
 
-**Solution:** Define a plugin interface that can tap into the REPL lifecycle:
+- `REPLPlugin` base class with 5 lifecycle hooks (`on_startup`, `on_pre_prompt`, `on_pre_message`, `on_event`, `on_shutdown`)
+- `PluginManager` with error isolation (one failing plugin can't crash the REPL)
+- Discovery from 4 sources: entry points (`mva.repl_plugins`), `~/.mva/plugins/`, `.mva/plugins/` (walking up from CWD), extra dirs
+- `MVA_NO_PLUGINS` env var kill switch
+- Wired into `_repl()` and `_run_single()` — all hooks called
+- `/plugins` command lists loaded plugins
+- Example plugin at `.mva/plugins/example_logger.py` (turn logger to `/tmp/`)
 
-```python
-# Plugin hook points
-class REPLPlugin:
-    def on_startup(self, session: Session, console: Console) -> None: ...
-    def on_pre_prompt(self) -> str | None: ...  # return custom prompt text
-    def on_pre_message(self, raw: str) -> str: ...  # transform input
-    def on_event(self, event: dict) -> None: ...  # tap into events
-    def on_shutdown(self) -> None: ...
-```
-
-Plugins discovered via `mva.repl_plugins` entry point group or `.mva/plugins/` directory.
-
-**Use cases:** custom pre-prompts, input validation, logging middleware, external integrations.
-
-**Effort:** 4 hours.
+**Effort:** 4 hours (completed).
 
 ---
 
@@ -425,33 +417,13 @@ The renderer calls `file_cache.add()` on `list_files` and `read` tool results. T
 
 ---
 
-### 3.4 Multi-Line Input Editor
+### 3.4 Multi-Line Input Editor ✅ **Done**
 
-**Problem:** The REPL currently supports single-line input only. Writing multi-line messages (pasting code, composing long instructions) is awkward.
-
-**Solution:** Add a toggle between single-line and multi-line modes:
-
-- `/multi` — enter multi-line mode (shows a full-screen buffer with prompt_toolkit)
-- Ctrl+D or `/end` — submit the multi-line buffer
-- `/single` — back to single-line mode
-
-In multi-line mode, show a `[dim](Ctrl+D to send, /end to finish)[/]` hint in the toolbar.
-
-```python
-def _multi_line_prompt(pt_session: PromptSession) -> str:
-    """Multi-line input using prompt_toolkit's buffered input."""
-    _console.print("[dim](Enter message, Ctrl+D or /end on its own line to submit)[/]")
-    lines = []
-    try:
-        while True:
-            line = pt_session.prompt("... ", multiline=False)
-            if line.strip() == "/end":
-                break
-            lines.append(line)
-    except (EOFError, KeyboardInterrupt):
-        pass
-    return "\n".join(lines)
-```
+**Implemented as:** `multiline=True` in `PromptSession` with a custom Enter key binding.
+- Enter on a non-empty line → inserts newline
+- Enter on an empty line (buffer ends with `\n`) → submits
+- No `/multi`/`/single` toggle needed — always-on multi-line
+- Bottom toolbar shows `[dim]↵↵ send[/]` hint alongside provider/model info
 
 **Effort:** 2 hours.
 
@@ -485,7 +457,7 @@ def _add_provider_wizard() -> None:
 
 ---
 
-Total Phase 3 effort: ~11 hours (estimates; 3.1 ✅ done, removes ~2h).
+Total Phase 3 effort: ~11 hours (estimates; 3.1 ✅, 3.2 ✅, 3.4 ✅ done, removes ~8h; 3.3 and 3.5 remain ~5h).
 
 ---
 
@@ -530,3 +502,4 @@ If you only have a few hours, implement in this order:
 7. ✅ [2.2] Session save/load
 8. ✅ [2.3] Conversation export
 9. ✅ [3.1] Visual diff in `edit` tool results
+10. ✅ [3.4] Multi-line input (always-on, double-Enter submit)

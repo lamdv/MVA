@@ -89,6 +89,7 @@ class MVACompleter(Completer):
         "/providers",
         "/tools",
         "/skills",
+        "/plugins",
         "/export",
         "/save",
         "/load",
@@ -250,12 +251,19 @@ def _build_key_bindings() -> KeyBindings:
 
     @kb.add("enter")
     def _(event: Any) -> None:
-        """Submit on empty line, insert newline otherwise."""
+        """Submit on empty line, insert newline otherwise.
+
+        Commands starting with ``/`` are submitted on a single Enter.
+        Regular messages require double-Enter (empty line to confirm).
+        """
         buffer = event.current_buffer
         text = buffer.text
 
         if not text:
             # Empty buffer → submit (REPL loop will skip it)
+            buffer.validate_and_handle()
+        elif text.strip().startswith("/"):
+            # Commands submit immediately on single Enter
             buffer.validate_and_handle()
         elif text.endswith("\n"):
             # Buffer ends with a newline → cursor is on an empty line → submit
@@ -297,8 +305,8 @@ def _get_bottom_toolbar() -> str:
         tt = _fmt_k(usage.total_tokens)
         ctx += f"  │  📊 {pt}↑ {ct}↓ {tt}∑"
 
-    # Multiline hint (faded)
-    ctx += "  │  [dim]↵↵ send[/]"
+    # Send hint (faded): ↵↵ for messages, ↵ for commands
+    ctx += "  │  [dim]↵ send msg  /  ↵ send cmd[/]"
 
     return ctx
 

@@ -155,10 +155,11 @@ class MarkdownRenderer:
     # ------------------------------------------------------------------
 
     def _sync_code_block_state(self) -> None:
-        """Recompute *in_code_block* by counting fences in the buffer.
+        """Recompute *in_code_block* by counting fences in the full buffer.
 
         Every pair of `` ``` `` toggles the state.  An odd count means
-        we're inside a fence.
+        we're inside a code block (an opening fence has been seen but
+        not yet matched by a closing fence).
         """
         count = self._buffer.count("```")
         self._in_code_block = (count % 2) == 1
@@ -187,28 +188,47 @@ class MarkdownRenderer:
     def _find_break(self, text: str) -> int:
         """Find the position of the last safe break point in *text*.
 
-        The search is constrained by the current code-block state:
-        inside a code block only fence-close and blank-line breaks
-        are considered; sentence boundaries are ignored to prevent
-        mid-code-block flushes.
-
-        Outside code blocks, sentence-boundary flushing is allowed
-        for responsive streaming.
+        Break rules:
+        - Only break at a **closing** fence: `` ``` `` at a line boundary
+          where the full-buffer count *before* it is odd (meaning an
+          opening fence has been seen and this is the matching close).
+          The rest of the fence line must be empty (no language ID).
+          Includes the trailing ``\\n`` so it doesn't linger.
+        - Outside a code block: break at blank lines (``\\n\\n``) or
+          sentence boundaries (``. ``, ``!\\n``, ``?\\n``).
+        - Never break at an **opening** fence (`` ```lang\\n ``) —
+          that would flush an empty code block.
+        - Never break at blank lines inside a code block — they are
+          semantically meaningful whitespace.
         """
-        # 1. Code fence close — always a safe break
+        # 1. Closing fence — identified by counting ``` in the full buffer
+        #    before this position.  An odd count means this ``` is the
+        #    matching close.
         fence_close = text.rfind("```")
         if fence_close != -1:
             end = fence_close + 3
-            # Ensure the fence is at a line boundary (not mid-word)
-            if (fence_close == 0 or text[fence_close - 1] == "\n") and (
-                end >= len(text) or text[end] in ("\n", " ", "")
-            ):
-                return end
+            # Ensure the fence is at a line boundary
+            if fence_close == 0 or text[fence_close - 1] == "\n":
+                # Count ``` in the FULL buffer before this fence candidate
+                count_before = self._buffer[
+                    : self._flush_pos + fence_close
+                ].count("```")
+                # Odd → an opening fence was already seen → this is a CLOSING fence
+                if count_before % 2 == 1:
+                    # Verify the fence line is bare (no language identifier)
+                    rest = text[end:]
+                    nl = rest.find("\n")
+                    after_fence = rest[:nl] if nl != -1 else rest
+                    if after_fence.strip() == "":
+                        # Include trailing newline so it doesn't linger
+                        return end + (nl + 1 if nl != -1 else len(rest))
 
-        # 2. Blank line — safe inside and outside code blocks
-        blank_line = text.rfind("\n\n")
-        if blank_line != -1:
-            return blank_line + 2
+        # 2. Blank line — only safe outside code blocks (inside they are
+        #    semantically meaningful whitespace in the code)
+        if not self._in_code_block:
+            blank_line = text.rfind("\n\n")
+            if blank_line != -1:
+                return blank_line + 2
 
         # 3. Sentence boundaries — only outside code blocks
         if not self._in_code_block:

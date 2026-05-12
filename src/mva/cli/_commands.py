@@ -34,6 +34,15 @@ _RELOAD_SENTINEL = object()
 The REPL loop checks for this sentinel and calls :func:`reload_environment`.
 """
 
+# Module-level plugin manager reference (set by app.py at startup)
+_plugin_manager_ref: Any | None = None
+
+
+def set_plugin_manager(mgr: Any) -> None:
+    """Store the active plugin manager for the ``/plugins`` command."""
+    global _plugin_manager_ref  # noqa: PLW0603
+    _plugin_manager_ref = mgr
+
 
 # ---------------------------------------------------------------------------
 # Display helpers
@@ -77,6 +86,7 @@ def print_help() -> None:
     table.add_row("/tools", "List available tools")
     table.add_row("/skills", "List available skills")
     table.add_row("/skill:<name>", "Enable/disable a skill")
+    table.add_row("/plugins", "List loaded REPL plugins")
     table.add_row("/save", "Save session (auto-generated ID)")
     table.add_row("/save <name>", "Save session with a friendly name")
     table.add_row("/load <id>", "Load a saved session")
@@ -366,6 +376,10 @@ def handle_command(
         _print_skills(skills or [])
         return True
 
+    if cmd == "plugins":
+        _print_plugins()
+        return True
+
     if cmd.startswith("skill:"):
         skill_name = cmd[6:].strip()
         _toggle_skill(skills or [], skill_name)
@@ -452,6 +466,28 @@ def handle_command(
 # ---------------------------------------------------------------------------
 # Tool / skill display
 # ---------------------------------------------------------------------------
+
+
+def _print_plugins() -> None:
+    """Print the list of loaded plugins."""
+    if _plugin_manager_ref is None:
+        _console.print("[dim]No plugin manager loaded.[/]")
+        return
+    plugins = _plugin_manager_ref.plugins
+    if not plugins:
+        _console.print("[dim]No plugins loaded.[/]")
+        _console.print(
+            "[dim]Add plugins as Python files under "
+            ".mva/plugins/ or install packages with "
+            "mva.repl_plugins entry points.[/]"
+        )
+        return
+    table = Table(title="Loaded Plugins", title_style="bold", box=None)
+    table.add_column("Plugin", style="cyan")
+    table.add_column("Description", style="white")
+    for p in plugins:
+        table.add_row(p.name, p.description)
+    _console.print(table)
 
 
 def _print_tools() -> None:

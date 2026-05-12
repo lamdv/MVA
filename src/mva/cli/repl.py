@@ -25,6 +25,7 @@ from mva.cli._commands import (
     reload_environment,
     _RELOAD_SENTINEL,
 )
+from mva.cli.plugins import PluginManager
 
 _console = Console()
 
@@ -89,77 +90,90 @@ def _repl(
     append_system_prompt: str | None = None,
     agent_md_path: str | None = "AGENT.md",
     auto_confirm: bool = False,
+    plugin_manager: PluginManager | None = None,
 ) -> None:
     """Interactive REPL: read-eval-print loop for the MVA agent."""
+    if plugin_manager is None:
+        plugin_manager = PluginManager()
     session.on_confirm = _confirm_callback
-    while True:
-        try:
-            raw = pt_session.prompt("You: ")
-        except (EOFError, KeyboardInterrupt):
-            if session.history:
-                sid = _save_session(session.history, session)
-                _console.print(f"[dim]💾 Auto-saved. Load with: /load {sid}[/]")
-            goodbye()
-            break
+    plugin_manager.on_startup(session, _console)
+    try:
+        while True:
+            # --- Plugin hook: custom prompt ---
+            prompt_text = plugin_manager.on_pre_prompt() or "You: "
 
-        raw = raw.strip()
-        if not raw:
-            continue
-
-        # Commands start with '/'
-        if raw.startswith("/"):
-            result = handle_command(raw, session.history, session, skills=skills)
-            if result is False:
+            try:
+                raw = pt_session.prompt(prompt_text)
+            except (EOFError, KeyboardInterrupt):
                 if session.history:
                     sid = _save_session(session.history, session)
                     _console.print(f"[dim]💾 Auto-saved. Load with: /load {sid}[/]")
+                goodbye()
                 break
-            if result is _RELOAD_SENTINEL:
-                reload_environment(session, skills)
-                # Rebuild the system prompt immediately so the next
-                # message uses the freshly reloaded tools + skills
-                session.system_prompt = build_system_prompt(
-                    get_tool_defs(),
-                    skills=skills,
-                    agent_md_path=agent_md_path,
-                    system_prompt=system_prompt,
-                    append_system_prompt=append_system_prompt,
-                )
-                _console.print(
-                    "[dim]System prompt updated with reloaded tools"
-                    " and skills.[/]"
-                )
-            continue
 
-        # Show current model/provider as a subtle reminder
-        _show_model_context(session)
+            # --- Plugin hook: transform input ---
+            raw = plugin_manager.on_pre_message(raw)
+            raw = raw.strip()
+            if not raw:
+                continue
 
-        # Build system prompt (fresh every turn for skill/AGENT.md changes)
-        session.system_prompt = build_system_prompt(
-            get_tool_defs(),
-            skills=skills,
-            agent_md_path=agent_md_path,
-            system_prompt=system_prompt,
-            append_system_prompt=append_system_prompt,
-        )
+            # Commands start with '/'
+            if raw.startswith("/"):
+                result = handle_command(raw, session.history, session, skills=skills)
+                if result is False:
+                    if session.history:
+                        sid = _save_session(session.history, session)
+                        _console.print(f"[dim]💾 Auto-saved. Load with: /load {sid}[/]")
+                    break
+                if result is _RELOAD_SENTINEL:
+                    reload_environment(session, skills)
+                    # Rebuild the system prompt immediately so the next
+                    # message uses the freshly reloaded tools + skills
+                    session.system_prompt = build_system_prompt(
+                        get_tool_defs(),
+                        skills=skills,
+                        agent_md_path=agent_md_path,
+                        system_prompt=system_prompt,
+                        append_system_prompt=append_system_prompt,
+                    )
+                    _console.print(
+                        "[dim]System prompt updated with reloaded tools"
+                        " and skills.[/]"
+                    )
+                continue
 
-        reset_renderer()
+            # Show current model/provider as a subtle reminder
+            _show_model_context(session)
 
-        try:
-            start_spinner()
-            for event in session.chat(raw, auto_confirm=auto_confirm):
-                render_event(event)
-        except LLMError as exc:
-            stop_spinner()
-            _console.print(f"\n[red]Error:[/] {exc}")
-            # Strip the failed user message from history so the
-            # model doesn't see it again on the next attempt
-            if session.history and session.history[-1]["role"] == "user":
-                session.history.pop()
-            _console.print("[dim]Message discarded. Re-type it or try something else.[/]")
-            continue
+            # Build system prompt (fresh every turn for skill/AGENT.md changes)
+            session.system_prompt = build_system_prompt(
+                get_tool_defs(),
+                skills=skills,
+                agent_md_path=agent_md_path,
+                system_prompt=system_prompt,
+                append_system_prompt=append_system_prompt,
+            )
 
-        print()
+            reset_renderer()
+
+            try:
+                start_spinner()
+                for event in session.chat(raw, auto_confirm=auto_confirm):
+                    plugin_manager.on_event(event)
+                    render_event(event)
+            except LLMError as exc:
+                stop_spinner()
+                _console.print(f"\n[red]Error:[/] {exc}")
+                # Strip the failed user message from history so the
+                # model doesn't see it again on the next attempt
+                if session.history and session.history[-1]["role"] == "user":
+                    session.history.pop()
+                _console.print("[dim]Message discarded. Re-type it or try something else.[/]")
+                continue
+
+            print()
+    finally:
+        plugin_manager.on_shutdown()
 
 
 # ---------------------------------------------------------------------------
@@ -176,11 +190,14 @@ def _run_single(
     agent_md_path: str | None = "AGENT.md",
     max_tool_rounds: int = 10,
     auto_confirm: bool = False,
+    plugin_manager: PluginManager | None = None,
 ) -> str | None:
     """Run a single task non-interactively.
 
     Returns the final response text, or ``None`` on error.
     """
+    if plugin_manager is None:
+        plugin_manager = PluginManager()
     if not user_message:
         _console.print("[red]Error:[/] No message provided.")
         return None
@@ -201,12 +218,17 @@ def _run_single(
         max_tool_rounds=max_tool_rounds,
     )
 
+    # Plugin hook: startup + transform input
+    plugin_manager.on_startup(session, _console)
+    user_message = plugin_manager.on_pre_message(user_message)
+
     try:
         final_text = ""
         start_spinner()
         for event in session.chat(
             user_message, print_mode=(not auto_confirm), auto_confirm=auto_confirm
         ):
+            plugin_manager.on_event(event)
             if event.get("type") == "done":
                 final_text = event.get("content", "")
             # Print streaming content directly
@@ -243,3 +265,5 @@ def _run_single(
         stop_spinner()
         _console.print(f"\n[red]Error:[/] {exc}")
         return None
+    finally:
+        plugin_manager.on_shutdown()

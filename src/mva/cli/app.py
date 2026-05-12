@@ -17,7 +17,8 @@ from mva.cli.repl import _repl, _run_single
 from mva.agent import Session, discover_skills, get_tool_defs
 from mva.config import load_config
 from mva.agent._system import build_system_prompt, install_signal_handler
-from mva.cli._commands import print_header
+from mva.cli._commands import print_header, set_plugin_manager
+from mva.cli.plugins import PluginManager, discover_plugins
 
 _console = Console()
 
@@ -83,6 +84,11 @@ def app(
     )
     set_skills(skills)
 
+    # Discover plugins at startup
+    plugin_manager_plugins = discover_plugins()
+    plugin_manager = PluginManager(plugin_manager_plugins)
+    set_plugin_manager(plugin_manager)
+
     # Build the user message: CLI argument(s) + optional piped stdin
     user_message = " ".join(message) if message else ""
     if not sys.stdin.isatty():
@@ -112,6 +118,7 @@ def app(
                 agent_md_path=agent_md_path,
                 max_tool_rounds=cfg.max_tool_rounds,
                 auto_confirm=yes,
+                plugin_manager=plugin_manager,
             )
         else:
             # Interactive REPL
@@ -143,6 +150,7 @@ def app(
                 append_system_prompt=append_system_prompt,
                 agent_md_path=agent_md_path,
                 auto_confirm=yes,
+                plugin_manager=plugin_manager,
             )
     finally:
         if session is not None:

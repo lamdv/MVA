@@ -6,6 +6,7 @@ Split into submodules:
 - ``console.py`` — prompt-toolkit session, completer, key bindings
 - ``repl.py`` — interactive REPL loop, turn handler, confirmation
 - ``renderer.py`` — streaming delta display
+- ``plugins/`` — REPL plugin system (``REPLPlugin``, ``PluginManager``)
 """
 
 from mva.cli.app import _app
