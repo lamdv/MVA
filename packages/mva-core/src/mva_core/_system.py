@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from mva.agent.types import ChatMessage, ToolDef, SkillDef
+    from mva_core.agent.types import ChatMessage, ToolDef, SkillDef
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +177,7 @@ def build_system_prompt(
     5. Tool instructions (if tools are provided)
     6. Current date and working directory
     """
-    from mva.agent.skills import build_skills_prompt  # noqa: PLC0415
+    from mva_core.skills import build_skills_prompt  # noqa: PLC0415
 
     # -- Layer 1: base prompt ---------------------------------------------
     mva_env = os.environ.get("MVA_SYSTEM_PROMPT", "").strip()
@@ -246,7 +246,7 @@ def build_messages(
     system: str, history: list[dict[str, Any]], new_user_msg: str
 ) -> list[ChatMessage]:
     """Build a message list suitable for the chat completions API."""
-    from mva.agent.types import ChatMessage  # noqa: PLC0415
+    from mva_core.agent.types import ChatMessage  # noqa: PLC0415
 
     messages: list[ChatMessage] = []
 

@@ -18,7 +18,7 @@ from prompt_toolkit.history import FileHistory
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style as PTStyle
 
-from mva.agent import Session, SkillDef
+from mva_core.agent import Session, SkillDef
 
 # ---------------------------------------------------------------------------
 # History path
@@ -127,7 +127,7 @@ class MVACompleter(Completer):
                 prov_part = prov_part.strip()
                 model_part = model_part.lstrip()
                 try:
-                    from mva.config import load_config  # noqa: PLC0415
+                    from mva_core.config import load_config  # noqa: PLC0415
 
                     cfg = load_config()
                     if prov_part in cfg.providers:
@@ -147,7 +147,7 @@ class MVACompleter(Completer):
             # No "/" yet — complete provider/model pairs first,
             # then plain model names.
             try:
-                from mva.config import load_config  # noqa: PLC0415
+                from mva_core.config import load_config  # noqa: PLC0415
 
                 cfg = load_config()
                 for prov_name, prov_cfg in cfg.providers.items():
@@ -187,7 +187,7 @@ class MVACompleter(Completer):
         if text.startswith("/provider ") or text == "/provider":
             prefix = text[len("/provider "):] if text.startswith("/provider ") else ""
             try:
-                from mva.config import load_config  # noqa: PLC0415
+                from mva_core.config import load_config  # noqa: PLC0415
 
                 cfg = load_config()
                 for name in cfg.providers:
@@ -311,7 +311,7 @@ def _get_bottom_toolbar() -> str:
     return ctx
 
 
-from mva.cli.renderer import _fmt_k
+from mva_cli.renderer import _fmt_k
 
 
 # ---------------------------------------------------------------------------

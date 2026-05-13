@@ -61,7 +61,7 @@ def stop_spinner() -> None:
 # Status line helpers — printed as part of normal output (no ANSI conflicts)
 # ---------------------------------------------------------------------------
 
-from mva.agent.types import CompletionUsage
+from mva_core.agent.types import CompletionUsage
 
 _status_session: Any | None = None
 """Session reference for reading provider/model/usage when rendering

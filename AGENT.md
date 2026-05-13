@@ -4,31 +4,52 @@
 
 MVA is an interactive, agentic REPL for LLMs. It wraps an OpenAI-compatible chat API with tool-calling, allowing the model to autonomously read files, write files, list directories, and execute sandboxed bash commands — all streamed to a rich terminal UI.
 
+The project is structured as a **uv workspace monorepo** with two packages:
+
+- **`mva-core`** — Agent logic, tools, skills, and configuration (no UI deps)
+- **`mva-cli`** — Terminal UI layer (depends on `mva-core`)
+
 ## Project layout
 
 ```
-src/mva/
-├── __init__.py          → main() entry point, delegates to cli.app()
-├── config.py            → model.yaml loader (search: ./.mva/, ~/.config/mva/)
-├── agent/               → self-contained agent package
-│   ├── __init__.py      → re-exports LLMClient, Session, ToolDef, execute_tool, SkillDef, …
-│   ├── client.py        → OpenAI-compatible HTTP client (streaming SSE + non-streaming)
-│   ├── session.py       → Session (conversation history, tool-calling loop)
-│   ├── tools/           → tool system (ToolDef, Tool, ToolResult, registry, builtins)
-│   │   ├── __init__.py  → re-exports base, registry, builtin
-│   │   ├── base.py      → ToolDef, Tool ABC, ToolResult, SecurityCheck
-│   │   ├── registry.py  → ToolRegistry (discovery, registration, execution)
-│   │   ├── path_security.py → path escape detection for sandboxing
-│   │   └── builtin/     → read, write, edit, bash, list_files
-│   └── skills/          → skill discovery and loading
-│       └── __init__.py  → SkillDef, discover_skills, build_skills_prompt
-├── cli/                 → CLI/UI layer (consumes agent)
-│   ├── app.py           → Typer entry point
-│   ├── console.py       → prompt-toolkit session, completer
-│   ├── renderer.py      → streaming event renderer
-│   └── repl.py          → REPL loop
-└── utils/
-    └── __init__.py      → UI helpers, system prompt builder, command dispatch
+mva/
+├── pyproject.toml               # uv workspace root
+├── packages/
+│   ├── mva-core/
+│   │   ├── pyproject.toml       # dependencies: pyyaml, requests
+│   │   └── src/mva_core/
+│   │       ├── __init__.py      # flat re-exports
+│   │       ├── _system.py       # system prompt builder, signal handling
+│   │       ├── config.py        # model.yaml loader
+│   │       ├── agent/
+│   │       │   ├── __init__.py  # re-exports LLMClient, Session, etc.
+│   │       │   ├── client.py    # OpenAI-compatible HTTP client
+│   │       │   ├── session.py   # Session (history, tool-calling loop)
+│   │       │   └── types.py     # ChatMessage, StreamingDelta, etc.
+│   │       ├── tools/
+│   │       │   ├── __init__.py  # re-exports base, registry, builtin
+│   │       │   ├── base.py      # ToolDef, Tool ABC, ToolResult, SecurityCheck
+│   │       │   ├── registry.py  # ToolRegistry (discovery, registration)
+│   │       │   ├── path_security.py  # path escape detection & sandboxing
+│   │       │   └── builtin/     # read, write, edit, bash, fetch_url, list_files
+│   │       └── skills/
+│   │           └── __init__.py  # SkillDef, discover_skills
+│   └── mva-cli/
+│       ├── pyproject.toml       # dependencies: mva-core, typer, rich, prompt-toolkit
+│       └── src/mva_cli/
+│           ├── __init__.py      # re-exports app
+│           ├── app.py           # Typer entry point
+│           ├── _commands.py     # command dispatch, helpers
+│           ├── console.py       # prompt-toolkit session, completer
+│           ├── plugins/         # plugin discovery
+│           ├── renderer.py      # streaming event renderer
+│           └── repl.py          # REPL loop
+├── src/mva/                     # Shim package (delegates to mva-cli)
+│   ├── __init__.py
+│   └── __main__.py
+├── docs/
+├── .mva/                        # project-level config (model.yaml, skills)
+└── README.md
 ```
 
 ## Tech stack
@@ -41,8 +62,10 @@ src/mva/
 ## How to run
 
 ```bash
-uv sync                          # install deps
-uv run --package mva python -m mva
+uv sync                          # install deps for all workspace packages
+uv run --package mva-cli python -m mva_cli
+# or via shim:
+uv run python -m mva
 ```
 
 ## Configuration
@@ -71,13 +94,13 @@ Example ``.mva/model.yaml``:
 
 ### Tool patterns
 
-Tools are class-based (subclassing :class:`~mva.agent.tools.base.Tool`) or
+Tools are class-based (subclassing :class:`~mva_core.tools.base.Tool`) or
 function-based (registered with the `@_register` decorator).
 
 **Class-based (preferred):**
 
 ```python
-from mva.agent.tools.base import Tool, ToolResult, SecurityCheck
+from mva_core.tools.base import Tool, ToolResult, SecurityCheck
 
 class MyTool(Tool):
     name = "my_tool"
@@ -91,7 +114,7 @@ class MyTool(Tool):
 **Function-based (legacy):**
 
 ```python
-from mva.agent.tools import _register
+from mva_core.tools import _register
 
 @_register(name="tool_name", description="...", parameters={...})
 def tool_name(arg1: str, _confirmed: bool = False) -> ToolResult:
@@ -106,16 +129,27 @@ Every tool must:
 
 See `docs/adding_tools.md` for the full guide.
 
+### Import paths
+
+| Module | Import path |
+|:---|---|
+| mva-core agent | `from mva_core.agent import Session, LLMClient` |
+| mva-core tools | `from mva_core.tools import ToolDef, ToolResult, execute_tool` |
+| mva-core tools (base) | `from mva_core.tools.base import Tool, SecurityCheck` |
+| mva-core config | `from mva_core.config import load_config` |
+| mva-core skills | `from mva_core.skills import discover_skills` |
+| mva-cli | `from mva_cli import app` |
+
 ### Key data types
 
 | Type | Defined in | Purpose |
 |:---|:---|:---|
-| `ChatMessage` | `agent/client.py` | A single conversation turn (role, content, tool_calls) |
-| `StreamingDelta` | `agent/client.py` | One SSE chunk from streaming |
-| `ToolDef` | `agent/tools/base.py` | Tool metadata sent to the API (name, description, parameters) |
-| `ToolResult` | `agent/tools/base.py` | Result of executing a tool (content, is_error, needs_confirmation) |
-| `SkillDef` | `agent/skills/__init__.py` | Metadata for a loaded skill (name, content, enabled) |
-| `SecurityCheck` | `agent/tools/base.py` | Outcome of a path/operation security evaluation |
+| `ChatMessage` | `mva_core.agent/types.py` | A single conversation turn (role, content, tool_calls) |
+| `StreamingDelta` | `mva_core.agent/types.py` | One SSE chunk from streaming |
+| `ToolDef` | `mva_core.tools/base.py` | Tool metadata sent to the API (name, description, parameters) |
+| `ToolResult` | `mva_core.tools/base.py` | Result of executing a tool (content, is_error, needs_confirmation) |
+| `SkillDef` | `mva_core.skills/__init__.py` | Metadata for a loaded skill (name, content, enabled) |
+| `SecurityCheck` | `mva_core.tools/base.py` | Outcome of a path/operation security evaluation |
 
 ### Security stack (4 layers)
 
@@ -159,24 +193,24 @@ See `docs/adding_tools.md` for the full guide.
 
 | File | When to edit |
 |:---|:---|
-| `src/mva/agent/__init__.py` | Adding re-exports from tools/skills |
-| `src/mva/agent/client.py` | Changing API client (new endpoints, streaming, params) |
-| `src/mva/agent/session.py` | Changing tool-calling loop logic |
-| `src/mva/agent/tools/base.py` | Adding new base types (ToolDef, Tool subclasses) |
-| `src/mva/agent/tools/registry.py` | Changing tool discovery or registration |
-| `src/mva/agent/tools/builtin/` | Adding new built-in tools |
-| `src/mva/agent/tools/path_security.py` | Changing sandbox/path security rules |
-| `src/mva/agent/skills/__init__.py` | Changing skill discovery or loading |
-| `src/mva/cli/repl.py` | Changing REPL flow |
-| `src/mva/cli/renderer.py` | Changing event rendering |
-| `src/mva/utils/__init__.py` | Changing system prompt, commands, or UI helpers |
-| `src/mva/config.py` | Changing config loading (model.yaml parsing, env fallback) |
-| `pyproject.toml` | Adding dependencies |
+| `packages/mva-core/src/mva_core/agent/__init__.py` | Adding re-exports from tools/skills |
+| `packages/mva-core/src/mva_core/agent/client.py` | Changing API client (new endpoints, streaming, params) |
+| `packages/mva-core/src/mva_core/agent/session.py` | Changing tool-calling loop logic |
+| `packages/mva-core/src/mva_core/tools/base.py` | Adding new base types (ToolDef, Tool subclasses) |
+| `packages/mva-core/src/mva_core/tools/registry.py` | Changing tool discovery or registration |
+| `packages/mva-core/src/mva_core/tools/builtin/` | Adding new built-in tools |
+| `packages/mva-core/src/mva_core/tools/path_security.py` | Changing sandbox/path security rules |
+| `packages/mva-core/src/mva_core/skills/__init__.py` | Changing skill discovery or loading |
+| `packages/mva-cli/src/mva_cli/repl.py` | Changing REPL flow |
+| `packages/mva-cli/src/mva_cli/renderer.py` | Changing event rendering |
+| `packages/mva-cli/src/mva_cli/_commands.py` | Changing command dispatch or display helpers |
+| `packages/mva-core/src/mva_core/config.py` | Changing config loading (model.yaml parsing, env fallback) |
+| `pyproject.toml` (root) | Workspace member management, dev dependencies |
 
 ## Adding a new tool (quick start)
 
-1. Subclass `Tool` from `src/mva/agent/tools/base.py` or use `@_register` in `src/mva/agent/tools/__init__.py`
+1. Subclass `Tool` from `packages/mva-core/src/mva_core/tools/base.py` or use `@_register` in `packages/mva-core/src/mva_core/tools/__init__.py`
 2. Follow the `_confirmed` + `check_file_path_escape` / `check_bash_escape` pattern
 3. Return `ToolResult(...)`
-4. If class-based, register it in `src/mva/agent/tools/builtin/__init__.py` (builtins) or via discovery
-5. Test with `uv run --package mva python -m mva` and type `/tools` to verify it appears
+4. If class-based, register it in `packages/mva-core/src/mva_core/tools/builtin/__init__.py` (builtins) or via discovery
+5. Test with `uv run --package mva-cli python -m mva_cli` and type `/tools` to verify it appears

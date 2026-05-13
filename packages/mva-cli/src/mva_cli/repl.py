@@ -14,10 +14,10 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
 
-from mva.cli.renderer import render_event, reset_renderer, start_spinner, stop_spinner
-from mva.agent import LLMError, Session, SkillDef, get_tool_defs
-from mva.agent._system import build_system_prompt
-from mva.cli._commands import (
+from mva_cli.renderer import render_event, reset_renderer, start_spinner, stop_spinner
+from mva_core.agent import LLMError, Session, SkillDef, get_tool_defs
+from mva_core._system import build_system_prompt
+from mva_cli._commands import (
     _save_session,
     goodbye,
     handle_command,
@@ -25,7 +25,7 @@ from mva.cli._commands import (
     reload_environment,
     _RELOAD_SENTINEL,
 )
-from mva.cli.plugins import PluginManager
+from mva_cli.plugins import PluginManager
 
 _console = Console()
 

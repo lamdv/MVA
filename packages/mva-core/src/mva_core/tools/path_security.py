@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from typing import ClassVar
 
-from mva.agent.tools.base import SecurityCheck
+from mva_core.tools.base import SecurityCheck
 
 
 # ---------------------------------------------------------------------------

@@ -22,8 +22,8 @@ import os
 from pathlib import Path
 from typing import Any
 
-from mva.agent.tools.base import SecurityCheck, Tool, ToolResult
-from mva.agent.tools.path_security import check_file_path_escape
+from mva_core.tools.base import SecurityCheck, Tool, ToolResult
+from mva_core.tools.path_security import check_file_path_escape
 
 # ---------------------------------------------------------------------------
 # Helpers

@@ -1,19 +1,10 @@
 [project]
 name = "mva"
 version = "0.1.0"
-description = "A Minimum Viable Agent harness"
+description = "A Minimum Viable Agent harness — monorepo root"
 readme = "README.md"
 authors = [{ name = "ldang", email = "lam.dv@live.com" }]
 requires-python = ">=3.13"
-dependencies = [
-  "prompt-toolkit>=3.0.52",
-  "pyyaml>=6.0.0",
-  "requests>=2.31.0",
-  "rich>=15.0.0",
-  "streamlit>=1.57.0",
-  "streamlit-extras>=1.5.0",
-  "typer>=0.25.1",
-]
 
 [project.scripts]
 mva = "mva:main"
@@ -21,6 +12,13 @@ mva = "mva:main"
 [build-system]
 requires = ["uv_build>=0.9.26,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+mva-core = { workspace = true }
+mva-cli = { workspace = true }
 
 [dependency-groups]
 dev = ["pylint>=4.0.5"]

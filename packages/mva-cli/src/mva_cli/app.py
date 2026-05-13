@@ -11,14 +11,14 @@ import sys
 import typer
 from rich.console import Console
 
-from mva.cli.console import _create_prompt_session, set_session, set_skills
-from mva.cli.renderer import set_markdown_mode
-from mva.cli.repl import _repl, _run_single
-from mva.agent import Session, discover_skills, get_tool_defs
-from mva.config import load_config
-from mva.agent._system import build_system_prompt, install_signal_handler
-from mva.cli._commands import print_header, set_plugin_manager
-from mva.cli.plugins import PluginManager, discover_plugins
+from mva_cli.console import _create_prompt_session, set_session, set_skills
+from mva_cli.renderer import set_markdown_mode
+from mva_cli.repl import _repl, _run_single
+from mva_core.agent import Session, discover_skills, get_tool_defs
+from mva_core.config import load_config
+from mva_core._system import build_system_prompt, install_signal_handler
+from mva_cli._commands import print_header, set_plugin_manager
+from mva_cli.plugins import PluginManager, discover_plugins
 
 _console = Console()
 

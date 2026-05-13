@@ -16,10 +16,12 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
-from mva.agent import get_tool_defs
+from mva_core.agent import get_tool_defs
+from mva_core.agent.types import CompletionUsage
+from mva_cli.renderer import reset_renderer, stop_spinner
 
 if TYPE_CHECKING:
-    from mva.agent import Session, SkillDef
+    from mva_core.agent import Session, SkillDef
 
 _console = Console()
 
@@ -251,7 +253,7 @@ def _load_session(session: Session, sid: str) -> bool:
     # Restore usage
     usage = data.get("usage")
     if usage:
-        from mva.agent.types import CompletionUsage
+        from mva_core.agent.types import CompletionUsage
         session.total_usage = CompletionUsage(
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
@@ -334,8 +336,17 @@ def handle_command(
         return False
 
     if cmd in ("clear", "cls", "reset"):
-        history.clear()
+        # Clear the conversation history via the Session's dedicated method
+        session.clear()
+        # Reset accumulated token usage
+        session.total_usage = CompletionUsage()
+        # Stop any active spinner from a previous incomplete stream
+        stop_spinner()
+        # Reset the renderer's per-turn state (buffers, phase tracking)
+        reset_renderer()
+        # Clear the terminal screen AND scrollback buffer
         _console.clear()
+        _console.print("\033[3J", end="")  # clear scrollback (vt100)
         print_header()
         _console.print("[dim]Conversation cleared.[/]")
         return True
@@ -723,7 +734,7 @@ def _switch_provider(session: Session, target: str) -> None:
 
 def _list_providers(session: Session) -> None:
     """List all available providers from the config file."""
-    from mva.config import load_config  # noqa: PLC0415
+    from mva_core.config import load_config  # noqa: PLC0415
 
     try:
         cfg = load_config()
@@ -786,9 +797,9 @@ def reload_environment(
     3. Re-discovers skills and replaces the *skills* list in-place
        (preserving enable/disable state by name).
     """
-    from mva.agent.tools.builtin import register_all  # noqa: PLC0415
-    from mva.agent.tools.registry import get_default_registry  # noqa: PLC0415
-    from mva.agent.skills import discover_skills  # noqa: PLC0415
+    from mva_core.tools.builtin import register_all  # noqa: PLC0415
+    from mva_core.tools.registry import get_default_registry  # noqa: PLC0415
+    from mva_core.skills import discover_skills  # noqa: PLC0415
 
     registry = get_default_registry()
     registry.reload_all(builtins_fn=register_all)

@@ -23,11 +23,11 @@ from __future__ import annotations
 import json
 from typing import Any, Generator
 
-from mva.agent.client import LLMClient
-from mva.agent.types import ChatMessage, CompletionUsage, LLMError, StreamingDelta
-from mva.agent.tools import ToolDef, ToolResult, execute_tool
-from mva.agent._system import build_messages, is_cancel_requested
-from mva.agent._system import _mark_streaming_start, _mark_streaming_stop
+from mva_core.agent.client import LLMClient
+from mva_core.agent.types import ChatMessage, CompletionUsage, LLMError, StreamingDelta
+from mva_core.tools import ToolDef, ToolResult, execute_tool
+from mva_core._system import build_messages, is_cancel_requested
+from mva_core._system import _mark_streaming_start, _mark_streaming_stop
 
 DEFAULT_MAX_TOOL_ROUNDS = 10
 
@@ -130,7 +130,7 @@ class Session:
     def _refresh_provider_state(self) -> None:
         """Read the active provider name and model list from config."""
         try:
-            from mva.config import load_config  # noqa: PLC0415
+            from mva_core.config import load_config  # noqa: PLC0415
             cfg = load_config()
             self.current_provider = cfg.provider
             provider_cfg = cfg.providers.get(cfg.provider)
@@ -148,7 +148,7 @@ class Session:
 
         Returns ``True`` on success, ``False`` if the provider is not found.
         """
-        from mva.config import reload_config  # noqa: PLC0415
+        from mva_core.config import reload_config  # noqa: PLC0415
 
         try:
             cfg = reload_config()

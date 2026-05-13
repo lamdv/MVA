@@ -41,14 +41,14 @@ default registry.
 
 from __future__ import annotations
 
-from mva.agent.tools.base import FunctionTool, SecurityCheck, Tool, ToolDef, ToolResult
-from mva.agent.tools.registry import (
+from mva_core.tools.base import FunctionTool, SecurityCheck, Tool, ToolDef, ToolResult
+from mva_core.tools.registry import (
     ToolRegistry,
     execute_tool,
     get_default_registry,
     get_tool_defs,
 )
-from mva.agent.tools.builtin import register_all as _register_builtins
+from mva_core.tools.builtin import register_all as _register_builtins
 
 __all__ = [
     "FunctionTool",

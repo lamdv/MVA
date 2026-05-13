@@ -23,7 +23,7 @@ from typing import Any, Generator
 
 import requests
 
-from mva.agent.types import (
+from mva_core.agent.types import (
     ChatChoice,
     ChatMessage,
     ChatResponse,
@@ -33,11 +33,12 @@ from mva.agent.types import (
     message_to_dict,
     tool_to_dict,
 )
-from mva.agent.tools import ToolDef
+from mva_core.tools import ToolDef
 
 # ---------------------------------------------------------------------------
 # Helper: ToolCallAccumulator
 # ---------------------------------------------------------------------------
+
 
 
 class ToolCallAccumulator:
@@ -172,7 +173,7 @@ class LLMClient:
         This is the recommended way to create a client in production.
         Use the constructor directly for testing or custom setups.
         """
-        from mva.config import load_config  # noqa: PLC0415
+        from mva_core.config import load_config  # noqa: PLC0415
 
         cfg = load_config()
         provider_cfg = cfg.providers.get(cfg.provider)
@@ -284,7 +285,7 @@ class LLMClient:
             raise ValueError("A model must be specified via argument or default_model.")
 
         # Lazy import to avoid circular dependency
-        from mva.agent._system import is_cancel_requested  # noqa: PLC0415
+        from mva_core._system import is_cancel_requested  # noqa: PLC0415
 
         body = self._build_request_body(
             messages,

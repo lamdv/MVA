@@ -6,7 +6,7 @@ from typing import Any
 
 import requests
 
-from mva.agent.tools.base import SecurityCheck, Tool, ToolResult
+from mva_core.tools.base import SecurityCheck, Tool, ToolResult
 
 # ---------------------------------------------------------------------------
 # Constants

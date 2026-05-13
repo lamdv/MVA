@@ -22,7 +22,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from mva.agent.tools.base import FunctionTool, SecurityCheck, Tool, ToolResult
+from mva_core.tools.base import FunctionTool, SecurityCheck, Tool, ToolResult
 
 
 # ---------------------------------------------------------------------------

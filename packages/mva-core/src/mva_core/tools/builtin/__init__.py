@@ -6,7 +6,7 @@ with all standard tools.
 
 from __future__ import annotations
 
-from mva.agent.tools.registry import ToolRegistry
+from mva_core.tools.registry import ToolRegistry
 
 from .bash import BashTool
 from .edit import EditTool
@@ -26,7 +26,7 @@ def register_all(registry: ToolRegistry) -> None:
     registry.register(BashTool())
 
     # 'ls' alias — same executor, distinct tool definition
-    from mva.agent.tools import ToolDef
+    from mva_core.tools import ToolDef
 
     ls_def = ToolDef(
         name="ls",
@@ -37,7 +37,7 @@ def register_all(registry: ToolRegistry) -> None:
         parameters=ListFilesTool.parameters,
     )
     # Register ls as a FunctionTool wrapping the ListFilesTool executor
-    from mva.agent.tools.base import FunctionTool
+    from mva_core.tools.base import FunctionTool
 
     ls_fn = ListFilesTool().execute
     registry.register(
